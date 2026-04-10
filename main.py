@@ -203,7 +203,9 @@ def _start_callback_server():
 
 @app.get("/api/auth/login")
 def auth_login():
-    _start_callback_server()
+    # If SF_REDIRECT_URI is set, the main app handles the callback directly — no separate listener needed
+    if not os.getenv("SF_REDIRECT_URI"):
+        _start_callback_server()
     url = build_login_url()
     return RedirectResponse(url=url)
 
