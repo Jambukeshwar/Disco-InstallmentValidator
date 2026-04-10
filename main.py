@@ -149,22 +149,63 @@ def auth_status():
         return {"authenticated": False}
 
 
+def _start_callback_server():
+    """Start the OAuth callback listener on port 8080 in a background thread."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import urlparse, parse_qs
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path != "/callback":
+                self._respond(404, "<h2>Not found</h2>")
+                return
+            params = parse_qs(parsed.query)
+            code  = params.get("code",  [None])[0]
+            state = params.get("state", [None])[0]
+            error = params.get("error", [None])[0]
+            if error:
+                self._respond(400, f"<h2>Login failed</h2><p>{params.get('error_description', [error])[0]}</p>")
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
+            try:
+                handle_callback(code, state)
+                self._respond(200, """
+                    <h2 style='color:green'>&#x2705; Authenticated!</h2>
+                    <p>You can close this tab and return to the app.</p>
+                    <script>setTimeout(() => window.close(), 2000)</script>
+                """)
+            except SalesforceError as e:
+                self._respond(400, f"<h2>Error</h2><p>{e}</p>")
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+        def _respond(self, status, html):
+            body = html.encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    def _serve():
+        try:
+            server = HTTPServer(("localhost", 8080), _Handler)
+            server.serve_forever()
+        except Exception:
+            pass
+
+    threading.Thread(target=_serve, daemon=True).start()
+
+
 @app.get("/api/auth/login")
 def auth_login():
+    _start_callback_server()
     url = build_login_url()
-    return HTMLResponse(f"""
-        <html><body style="font-family:sans-serif;padding:2rem">
-        <h2>Salesforce Login</h2>
-        <p>Make sure <code>callback_server.py</code> is running in a separate terminal first:</p>
-        <pre style="background:#f4f4f4;padding:1rem">python callback_server.py</pre>
-        <p>Then click below to log in:</p>
-        <a href="{url}" style="
-            display:inline-block;padding:.75rem 1.5rem;
-            background:#0070d2;color:white;border-radius:4px;
-            text-decoration:none;font-size:1rem
-        ">Login with Salesforce</a>
-        </body></html>
-    """)
+    return RedirectResponse(url=url)
 
 
 @app.get("/api/auth/callback")
@@ -256,6 +297,8 @@ def trim_old_runs(conn, keep: int = 5):
     ).fetchall()
     for row in old:
         conn.execute("DELETE FROM results WHERE run_id = ?", (row["id"],))
+        conn.execute("DELETE FROM matrixx_results WHERE run_id = ?", (row["id"],))
+        conn.execute("DELETE FROM sf_asset_results WHERE run_id = ?", (row["id"],))
         conn.execute("DELETE FROM runs WHERE id = ?", (row["id"],))
     if old:
         conn.commit()
@@ -517,6 +560,8 @@ def clear_runs(request: Request):
     require_session(request)
     conn = get_connection()
     conn.execute("DELETE FROM results")
+    conn.execute("DELETE FROM matrixx_results")
+    conn.execute("DELETE FROM sf_asset_results")
     conn.execute("DELETE FROM runs")
     conn.commit()
     conn.close()
