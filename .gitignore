@@ -1,0 +1,10 @@
+.env
+auth_data.json
+nso_validator.db
+disco-validator.log
+static/disco-validator.log
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
