@@ -346,6 +346,7 @@
     <button class="sys-tab active" id="sys-tab-aria"    onclick="setSystemTab('aria')">🔵 Aria</button>
     <button class="sys-tab"        id="sys-tab-matrixx" onclick="setSystemTab('matrixx')">🟠 Matrixx</button>
     <button class="sys-tab"        id="sys-tab-sf"      onclick="setSystemTab('sf')">🟢 Salesforce Asset</button>
+    <button class="sys-tab"        id="sys-tab-ai"      onclick="setSystemTab('ai')">🤖 AI Insights</button>
   </div>
 
   <div id="filter-bar">
@@ -811,8 +812,43 @@
     document.getElementById('sys-tab-aria').classList.toggle('active',tab==='aria');
     document.getElementById('sys-tab-matrixx').classList.toggle('active',tab==='matrixx');
     document.getElementById('sys-tab-sf').classList.toggle('active',tab==='sf');
+    document.getElementById('sys-tab-ai').classList.toggle('active',tab==='ai');
     updateStats();
-    if(tab==='aria')applyFilter();else if(tab==='matrixx')renderMatrixxTable();else renderSFAssetTable();
+    if(tab==='aria')applyFilter();
+    else if(tab==='matrixx')renderMatrixxTable();
+    else if(tab==='sf')renderSFAssetTable();
+    else if(tab==='ai')renderAIInsights();
+  }
+
+  async function renderAIInsights(){
+    const wrap=document.getElementById('table-wrap');
+    if(!currentRunId){wrap.innerHTML=`<div id="empty-state"><div class="empty-icon">🤖</div><div class="empty-title">No run selected</div><div class="empty-sub">Run a validation first to see AI insights.</div></div>`;return;}
+    wrap.innerHTML=`<div id="empty-state"><div class="empty-icon">🤖</div><div class="empty-title">Loading insights...</div></div>`;
+    try{
+      const data=await(await fetch(`/api/runs/${currentRunId}/suggestions`)).json();
+      const rows=data.suggestions||[];
+      if(!rows.length){wrap.innerHTML=`<div id="empty-state"><div class="empty-icon">🤖</div><div class="empty-title">No suggestions</div></div>`;return;}
+      const actionRows=rows.filter(r=>!r.clean);
+      const cleanRows=rows.filter(r=>r.clean);
+      let tbody='';
+      for(const r of [...actionRows,...cleanRows]){
+        const icon=r.clean?'✅':'⚠️';
+        const rowClass=r.clean?'':'style="background:rgba(255,170,0,0.04)"';
+        tbody+=`<tr ${rowClass}>
+          <td>${icon}</td>
+          <td style="font-weight:600">${r.msisdn}</td>
+          <td><span style="font-size:10px;color:var(--text-dim)">${r.aria}</span></td>
+          <td><span style="font-size:10px;color:var(--text-dim)">${r.matrixx}</span></td>
+          <td style="color:${r.clean?'var(--green)':'var(--amber)'};font-weight:500">${r.suggestion}</td>
+        </tr>`;
+      }
+      wrap.innerHTML=`<table>
+        <thead><tr>
+          <th></th><th>MSISDN</th><th>Aria Flags</th><th>Matrixx Flags</th><th>🤖 Suggested Next Action</th>
+        </tr></thead>
+        <tbody>${tbody}</tbody>
+      </table>`;
+    }catch(e){wrap.innerHTML=`<div id="empty-state"><div class="empty-icon">❌</div><div class="empty-title">Failed to load insights</div></div>`;}
   }
 
   async function loadHistory(){const runs=await(await fetch('/api/runs')).json();renderHistory(runs);}
@@ -914,7 +950,7 @@
 
     document.getElementById('download-btn').disabled=false;
     updateStats();
-    if(currentSystemTab==='aria')applyFilter();else if(currentSystemTab==='matrixx')renderMatrixxTable();else renderSFAssetTable();
+    if(currentSystemTab==='aria')applyFilter();else if(currentSystemTab==='matrixx')renderMatrixxTable();else if(currentSystemTab==='sf')renderSFAssetTable();else if(currentSystemTab==='ai')renderAIInsights();
     loadHistory();
   }
 
@@ -934,6 +970,7 @@
   function applyFilter(){
     if(currentSystemTab==='matrixx'){renderMatrixxTable();return;}
     if(currentSystemTab==='sf'){renderSFAssetTable();return;}
+    if(currentSystemTab==='ai'){renderAIInsights();return;}
     const s=document.getElementById('search-input').value.toLowerCase();
     let rows=allResults;
     if(currentFilter==='ok')rows=rows.filter(r=>r.validation==='✅');

@@ -236,6 +236,75 @@ def action_create_nso(req: CreateNSORequest, request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ── AI Suggestion ─────────────────────────────────────────────────────────────
+
+def generate_suggestion(aria_fields: str, mtx_fields: str) -> str:
+    """Generate a prioritized next-action suggestion based on Aria and Matrixx field_to_review values."""
+    aria = set((aria_fields or "").split("|"))
+    mtx  = set((mtx_fields  or "").split("|"))
+
+    steps = []
+
+    # BAN-CAN mismatch — stop here, no corrective actions suggested
+    if "BANCAN_Mismatch" in aria and "BANCAN_Mismatch" in mtx:
+        return "BAN-CAN mismatch in both Aria and Matrixx — verify order BAN-CAN before taking any action"
+    if "BANCAN_Mismatch" in aria:
+        return "BAN-CAN mismatch in Aria — verify order BAN-CAN before taking any action"
+    if "BANCAN_Mismatch" in mtx:
+        return "BAN-CAN mismatch in Matrixx — verify order BAN-CAN before taking any action"
+
+    # Only suggest actions if BAN-CAN matches
+    # Aria actions — follow hierarchy: NSO → Cancel device with reason → Cancel plan
+    if "Possible_reactivation" in aria:
+        steps.append("Verify if customer was reactivated — no action may be needed")
+
+    plan_cancelled = "Plan_Status" not in aria   # Plan_Status flag means plan is NOT cancelled
+    device_active  = "Device_Status" in aria
+    nso_needed     = "NSO" in aria
+    inst_review    = "Installment_Status" in aria
+
+    if plan_cancelled and (nso_needed or device_active):
+        # Plan is cancelled but still has pending work — must activate plan first
+        steps.append("Activate plan in Aria")
+        if nso_needed:
+            steps.append("Create NSO balance order in Aria")
+        if device_active:
+            steps.append("Cancel device with reason in Aria")
+        steps.append("Cancel plan in Aria")
+    else:
+        # Normal hierarchy: NSO → Cancel device with reason → Cancel plan
+        if nso_needed:
+            steps.append("Create NSO balance order in Aria")
+        if device_active:
+            steps.append("Cancel device with reason in Aria")
+        if "Plan_Status" in aria:
+            steps.append("Cancel plan in Aria")
+
+    if inst_review and not nso_needed:
+        steps.append("Review installment status in Aria")
+
+    # Matrixx actions
+    if "Device_Active" in mtx:
+        steps.append("Deactivate device in Matrixx")
+    if "Subscription_Active" in mtx:
+        steps.append("Check active subscription in Matrixx")
+    if "Plan_Active" in mtx:
+        steps.append("Check active plan in Matrixx")
+
+    all_clean = (
+        "No_Action_Required" in aria and
+        "No_Action_Required" in mtx
+    )
+
+    if all_clean:
+        return "All systems clean — no action required."
+
+    if not steps:
+        return "Review flagged fields manually."
+
+    return " → ".join(steps)
+
+
 # ── Runs ───────────────────────────────────────────────────────────────────────
 
 def trim_old_runs(conn, keep: int = 5):
@@ -798,6 +867,38 @@ def get_sf_asset_results(run_id: int, request: Request):
     ).fetchall()
     conn.close()
     return {"run": dict(run), "results": [dict(r) for r in results]}
+
+
+@app.get("/api/runs/{run_id}/suggestions")
+def get_suggestions(run_id: int, request: Request):
+    require_session(request)
+    conn = get_connection()
+    aria_rows = conn.execute(
+        "SELECT msisdn, field_to_review FROM results WHERE run_id = ?", (run_id,)
+    ).fetchall()
+    mtx_rows = conn.execute(
+        "SELECT msisdn, mtx_field_to_review FROM matrixx_results WHERE run_id = ?", (run_id,)
+    ).fetchall()
+    conn.close()
+
+    aria_map = {r["msisdn"]: r["field_to_review"] for r in aria_rows}
+    mtx_map  = {r["msisdn"]: r["mtx_field_to_review"] for r in mtx_rows}
+
+    all_msisdns = set(aria_map) | set(mtx_map)
+    suggestions = []
+    for msisdn in sorted(all_msisdns):
+        aria_f = aria_map.get(msisdn, "")
+        mtx_f  = mtx_map.get(msisdn, "")
+        suggestion = generate_suggestion(aria_f, mtx_f)
+        is_clean   = suggestion == "All systems clean — no action required."
+        suggestions.append({
+            "msisdn":     msisdn,
+            "aria":       aria_f or "N/A",
+            "matrixx":    mtx_f  or "N/A",
+            "suggestion": suggestion,
+            "clean":      is_clean,
+        })
+    return {"suggestions": suggestions}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
