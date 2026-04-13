@@ -30,7 +30,7 @@ SF_CLIENT_SECRET = os.getenv("SF_CLIENT_SECRET", "")   # optional for PKCE
 SF_INSTANCE_URL  = os.getenv("SF_INSTANCE_URL", "")
 
 QUERY_PATH   = "/services/data/v59.0/query"
-REDIRECT_URI = os.getenv("SF_REDIRECT_URI", "http://localhost:8080/callback")
+REDIRECT_URI = os.getenv("SF_REDIRECT_URI", "http://localhost:8000/api/auth/callback")
 SCOPES       = "api refresh_token offline_access"
 
 TOKEN_EXPIRY_BUFFER = 300  # refresh 5 min before expiry

@@ -607,9 +607,12 @@
 <div class="conn-modal-bg hidden" id="sf-modal">
   <div class="conn-modal">
     <div class="conn-modal-title">🔵 Connect Salesforce</div>
-    <div class="conn-modal-sub">Click below to log in with your Salesforce account via SSO.</div>
+    <div class="conn-modal-sub">Run <code>python callback_server.py</code> in a terminal, log in to Salesforce, then paste the tokens from <code>auth_data.json</code> below.</div>
+    <div class="conn-modal-field"><label>Access Token</label><input type="password" id="sf-access-token" placeholder="Paste access_token"/></div>
+    <div class="conn-modal-field"><label>Refresh Token</label><input type="password" id="sf-refresh-token" placeholder="Paste refresh_token"/></div>
+    <div class="conn-modal-field"><label>Instance URL</label><input type="text" id="sf-instance-url" placeholder="https://cwc.my.salesforce.com"/></div>
     <div class="conn-modal-btns">
-      <button class="conn-modal-btn-primary" onclick="doSFLogin()">Login with Salesforce</button>
+      <button class="conn-modal-btn-primary" onclick="doSFTokenUpdate()">Connect Salesforce</button>
       <button class="conn-modal-btn-secondary" onclick="closeModal('sf-modal')">Cancel</button>
     </div>
     <div class="conn-modal-status" id="sf-modal-status"></div>
@@ -767,22 +770,14 @@
     catch{document.getElementById('dot-mtx').className='conn-dot err';document.getElementById('lbl-mtx').textContent='Matrixx — unreachable';}
   }
 
-  function doSFLogin(){
-    const st = document.getElementById('sf-modal-status');
-    st.textContent = 'Waiting for Salesforce login...';
-    st.className = 'conn-modal-status';
-    window.open('/api/auth/login', '_blank');
-    const poll = setInterval(async () => {
-      try {
-        const d = await (await fetch('/api/auth/status')).json();
-        if (d.authenticated) {
-          clearInterval(poll);
-          st.textContent = '✅ Salesforce connected!';
-          st.className = 'conn-modal-status ok';
-          setTimeout(() => { closeModal('sf-modal'); checkConnections(); }, 1500);
-        }
-      } catch {}
-    }, 2000);
+  async function doSFTokenUpdate(){
+    const aT=document.getElementById('sf-access-token').value.trim(),rT=document.getElementById('sf-refresh-token').value.trim(),iU=document.getElementById('sf-instance-url').value.trim(),st=document.getElementById('sf-modal-status');
+    if(!aT||!rT||!iU){st.textContent='❌ Please fill in all fields.';st.className='conn-modal-status err';return;}
+    st.textContent='Connecting...';st.className='conn-modal-status';
+    try{const res=await fetch('/api/admin/sf-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:aT,refresh_token:rT,instance_url:iU})});const d=await res.json();
+      if(d.status==='ok'){st.textContent='✅ Salesforce connected!';st.className='conn-modal-status ok';document.getElementById('sf-access-token').value='';document.getElementById('sf-refresh-token').value='';document.getElementById('sf-instance-url').value='';setTimeout(()=>{closeModal('sf-modal');checkConnections();},1500);}
+      else{st.textContent=`❌ ${d.detail||'Connection failed'}`;st.className='conn-modal-status err';}}
+    catch{st.textContent='❌ Failed. Check server.';st.className='conn-modal-status err';}
   }
 
   async function doMatrixxConnect(){

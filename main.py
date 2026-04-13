@@ -149,63 +149,8 @@ def auth_status():
         return {"authenticated": False}
 
 
-def _start_callback_server():
-    """Start the OAuth callback listener on port 8080 in a background thread."""
-    import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-    from urllib.parse import urlparse, parse_qs
-
-    class _Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            parsed = urlparse(self.path)
-            if parsed.path != "/callback":
-                self._respond(404, "<h2>Not found</h2>")
-                return
-            params = parse_qs(parsed.query)
-            code  = params.get("code",  [None])[0]
-            state = params.get("state", [None])[0]
-            error = params.get("error", [None])[0]
-            if error:
-                self._respond(400, f"<h2>Login failed</h2><p>{params.get('error_description', [error])[0]}</p>")
-                threading.Thread(target=self.server.shutdown, daemon=True).start()
-                return
-            try:
-                handle_callback(code, state)
-                self._respond(200, """
-                    <h2 style='color:green'>&#x2705; Authenticated!</h2>
-                    <p>You can close this tab and return to the app.</p>
-                    <script>setTimeout(() => window.close(), 2000)</script>
-                """)
-            except SalesforceError as e:
-                self._respond(400, f"<h2>Error</h2><p>{e}</p>")
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
-
-        def _respond(self, status, html):
-            body = html.encode()
-            self.send_response(status)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *_):
-            pass
-
-    def _serve():
-        try:
-            server = HTTPServer(("localhost", 8080), _Handler)
-            server.serve_forever()
-        except Exception:
-            pass
-
-    threading.Thread(target=_serve, daemon=True).start()
-
-
 @app.get("/api/auth/login")
 def auth_login():
-    # If SF_REDIRECT_URI is set, the main app handles the callback directly — no separate listener needed
-    if not os.getenv("SF_REDIRECT_URI"):
-        _start_callback_server()
     url = build_login_url()
     return RedirectResponse(url=url)
 
