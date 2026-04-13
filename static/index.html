@@ -766,7 +766,7 @@
   async function checkConnections(){
     try{const d=await(await fetch('/api/auth/status')).json();document.getElementById('dot-sf').className=d.authenticated?'conn-dot ok':'conn-dot err';document.getElementById('lbl-sf').textContent=d.authenticated?'Salesforce — connected':'Salesforce — not logged in';}
     catch{document.getElementById('dot-sf').className='conn-dot err';document.getElementById('lbl-sf').textContent='Salesforce — unreachable';}
-    try{const d=await(await fetch('/api/matrixx/status')).json();document.getElementById('dot-mtx').className=d.reachable?'conn-dot ok':'conn-dot err';document.getElementById('lbl-mtx').textContent=d.reachable?'Matrixx — port-forward active':'Matrixx — port-forward down';}
+    try{const d=await(await fetch('/api/matrixx/status')).json();document.getElementById('dot-mtx').className=d.reachable?'conn-dot ok':'conn-dot err';document.getElementById('lbl-mtx').textContent=d.reachable?'Matrixx — port-forward active':`Matrixx — ${d.message||'port-forward down'}`;}
     catch{document.getElementById('dot-mtx').className='conn-dot err';document.getElementById('lbl-mtx').textContent='Matrixx — unreachable';}
   }
 

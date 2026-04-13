@@ -686,12 +686,17 @@ def download_run(run_id: int, request: Request):
 @app.get("/api/matrixx/status")
 def matrixx_status():
     import requests as req
+    # Check if port-forward process is alive
+    pf_alive = _portforward_process is not None and _portforward_process.poll() is None
     try:
         url = f"{matrixx_validator.MATRIXX_BASE_URL.rstrip('/')}/subscription/AccessNumber+test"
         r = req.get(url, timeout=3)
-        return {"reachable": True}
+        return {"reachable": True, "pf_alive": pf_alive, "message": "Connected"}
     except Exception:
-        return {"reachable": False}
+        if pf_alive:
+            return {"reachable": False, "pf_alive": True, "message": "Port-forward running but Matrixx unreachable"}
+        else:
+            return {"reachable": False, "pf_alive": False, "message": "Port-forward down — re-enter AWS credentials"}
 
 
 _portforward_process = None
