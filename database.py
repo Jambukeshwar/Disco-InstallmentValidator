@@ -132,5 +132,57 @@ def init_db():
     if "sf_last_modified" not in existing_sf:
         c.execute("ALTER TABLE sf_asset_results ADD COLUMN sf_last_modified TEXT")
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS order_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            triggered_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running',
+            filters TEXT,
+            total INTEGER DEFAULT 0,
+            error TEXT,
+            message TEXT
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS order_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            order_type TEXT,
+            bancan TEXT,
+            acct_no TEXT,
+            master_plan_instance_no TEXT,
+            sku TEXT,
+            order_date TEXT,
+            order_no TEXT,
+            quantity TEXT,
+            unit_price TEXT,
+            amount TEXT,
+            order_line_comment TEXT,
+            product TEXT,
+            msisdn TEXT,
+            installment_id TEXT,
+            plan_description TEXT,
+            client_instance_id TEXT,
+            aria_instance_no TEXT,
+            plan_status TEXT,
+            acct_status TEXT,
+            mpi_status TEXT,
+            FOREIGN KEY (run_id) REFERENCES order_runs(id)
+        )
+    """)
+
+    # Migrate order_results — add new columns if missing
+    existing_order = {row[1] for row in c.execute("PRAGMA table_info(order_results)")}
+    if "acct_status" not in existing_order:
+        c.execute("ALTER TABLE order_results ADD COLUMN acct_status TEXT")
+    if "mpi_status" not in existing_order:
+        c.execute("ALTER TABLE order_results ADD COLUMN mpi_status TEXT")
+
+    # Migrate order_runs — add message column if missing
+    existing_order_runs = {row[1] for row in c.execute("PRAGMA table_info(order_runs)")}
+    if "message" not in existing_order_runs:
+        c.execute("ALTER TABLE order_runs ADD COLUMN message TEXT")
+
     conn.commit()
     conn.close()

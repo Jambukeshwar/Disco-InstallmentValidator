@@ -1,5 +1,6 @@
 import io
 import os
+import requests
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
@@ -14,7 +15,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 
 from database import init_db, get_connection
 from salesforce import build_login_url, handle_callback, is_authenticated, clear_token, run_soql, SalesforceError
-from aria_validator import run_validation
+from aria_validator import run_validation, acct_statusfn, child_planfn, ARIA_CLIENT_NO, ARIA_AUTH_KEY, ARIA_URL_V1, HEADERS
 from aria_actions import cancel_plan, cancel_installment, create_nso_order, activate_plan
 from matrixx_actions import deactivate_device
 import matrixx_validator
@@ -35,6 +36,13 @@ app.add_middleware(
 init_db()
 init_auth_db()
 
+# Reset any runs left in "running" state from a previous crashed/restarted process
+_startup_conn = get_connection()
+_startup_conn.execute("UPDATE runs SET status='interrupted' WHERE status='running'")
+_startup_conn.execute("UPDATE order_runs SET status='interrupted' WHERE status IN ('running','stopping')")
+_startup_conn.commit()
+_startup_conn.close()
+
 
 # ── Pydantic models ────────────────────────────────────────────────────────────
 
@@ -46,6 +54,13 @@ class RunRequest(BaseModel):
 
 class ManualRunRequest(BaseModel):
     msisdns: list[str]
+
+class OrderValidatorRequest(BaseModel):
+    date_from:   str = ""
+    date_to:     str = ""
+    bancan:      str = ""
+    msisdn:      str = ""
+    plan_status: str = ""
 
 class LoginRequest(BaseModel):
     username: str
@@ -234,6 +249,286 @@ def action_create_nso(req: CreateNSORequest, request: Request):
         return {"status": "ok", "aria_response": result}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── Order Validator ───────────────────────────────────────────────────────────
+
+import db_validator as _db_validator
+
+
+def _order_run_is_stopping(conn, run_id: int) -> bool:
+    row = conn.execute("SELECT status FROM order_runs WHERE id=?", (run_id,)).fetchone()
+    return row and row["status"] == "stopping"
+
+
+def _process_order_validator(run_id: int, filters: dict):
+    conn = get_connection()
+    try:
+        # 1. Fetch orders
+        conn.execute("UPDATE order_runs SET message=? WHERE id=?", ("Step 1/2: Querying orders from database (this may take 30–90s)…", run_id))
+        conn.commit()
+        rows = _db_validator.query_orders(**filters)
+
+        if _order_run_is_stopping(conn, run_id):
+            conn.execute("UPDATE order_runs SET status='stopped', message='Stopped by user.' WHERE id=?", (run_id,))
+            conn.commit()
+            return
+
+        total = len(rows)
+        conn.execute("UPDATE order_runs SET total=?, message=? WHERE id=?",
+                     (total, f"Step 1/2 done — {total} orders found. Step 2/2: Fetching account status…", run_id))
+        conn.commit()
+
+        # 2. Fetch Account Status + MPI Status for all unique BANCANs
+        bancans = list({r.get("bancan","") for r in rows if r.get("bancan","")})
+        try:
+            acct_lookup = _db_validator.query_account_status(bancans) if bancans else {}
+        except Exception:
+            acct_lookup = {}
+
+        if _order_run_is_stopping(conn, run_id):
+            conn.execute("UPDATE order_runs SET status='stopped', message='Stopped by user.' WHERE id=?", (run_id,))
+            conn.commit()
+            return
+
+        conn.execute("UPDATE order_runs SET message=? WHERE id=?", ("Step 2/2 done — merging results…", run_id))
+        conn.commit()
+
+        # 3. Insert merged rows
+        for row in rows:
+            acct_info = acct_lookup.get(row.get("bancan",""), {})
+            conn.execute("""
+                INSERT INTO order_results
+                    (run_id, order_type, bancan, acct_no, master_plan_instance_no,
+                     sku, order_date, order_no, quantity, unit_price, amount,
+                     order_line_comment, product, msisdn, installment_id,
+                     plan_description, client_instance_id, aria_instance_no, plan_status,
+                     acct_status, mpi_status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (run_id,
+                  row.get("order_type",""), row.get("bancan",""), row.get("acct_no",""),
+                  row.get("master_plan_instance_no",""), row.get("sku",""),
+                  row.get("order_date",""), row.get("order_no",""), row.get("quantity",""),
+                  row.get("unit_price",""), row.get("amount",""),
+                  row.get("order_line_comment",""), row.get("product",""),
+                  row.get("msisdn",""), row.get("installment_id",""),
+                  row.get("plan_description",""), row.get("client_instance_id",""),
+                  row.get("aria_instance_no",""), row.get("plan_status",""),
+                  acct_info.get("acct_status",""), acct_info.get("mpi_status","")))
+        conn.execute("UPDATE order_runs SET status='completed' WHERE id=?", (run_id,))
+        conn.commit()
+    except Exception as e:
+        conn.execute("UPDATE order_runs SET status='failed', error=? WHERE id=?", (str(e), run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _order_results_from_db(run_id: int) -> list:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM order_results WHERE run_id=? ORDER BY order_date DESC, bancan", (run_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/order-validator/run")
+def start_order_validator(req: OrderValidatorRequest, background_tasks: BackgroundTasks, request: Request):
+    require_session(request)
+    import json as _json
+    filters = {
+        "date_from":   req.date_from   or None,
+        "date_to":     req.date_to     or None,
+        "bancan":      req.bancan      or None,
+        "msisdn":      req.msisdn      or None,
+        "plan_status": req.plan_status or None,
+    }
+    conn = get_connection()
+    cur = conn.execute(
+        "INSERT INTO order_runs (triggered_at, status, filters, total) VALUES (?,?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), "running", _json.dumps(filters), 0)
+    )
+    run_id = cur.lastrowid
+    old = conn.execute(
+        "SELECT id FROM order_runs ORDER BY triggered_at DESC LIMIT -1 OFFSET 10"
+    ).fetchall()
+    for row in old:
+        conn.execute("DELETE FROM order_results WHERE run_id=?", (row["id"],))
+        conn.execute("DELETE FROM order_runs WHERE id=?", (row["id"],))
+    conn.commit()
+    conn.close()
+    background_tasks.add_task(_process_order_validator, run_id, filters)
+    return {"run_id": run_id}
+
+
+@app.get("/api/order-validator/runs")
+def list_order_runs(request: Request):
+    require_session(request)
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM order_runs ORDER BY triggered_at DESC LIMIT 10").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/order-validator/run/{run_id}/stop")
+def stop_order_run(run_id: int, request: Request):
+    require_session(request)
+    conn = get_connection()
+    run = conn.execute("SELECT status FROM order_runs WHERE id=?", (run_id,)).fetchone()
+    if run and run["status"] == "running":
+        conn.execute("UPDATE order_runs SET status='stopping', message='Stop requested — waiting for current query to finish…' WHERE id=?", (run_id,))
+        conn.commit()
+    conn.close()
+    return {"status": "stop_requested"}
+
+
+@app.delete("/api/order-validator/run/{run_id}")
+def delete_order_run(run_id: int, request: Request):
+    require_session(request)
+    conn = get_connection()
+    run = conn.execute("SELECT status FROM order_runs WHERE id=?", (run_id,)).fetchone()
+    if not run:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run["status"] in ("running", "stopping"):
+        conn.close()
+        raise HTTPException(status_code=409, detail="Cannot delete a run that is still in progress")
+    conn.execute("DELETE FROM order_results WHERE run_id=?", (run_id,))
+    conn.execute("DELETE FROM order_runs WHERE id=?", (run_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted"}
+
+
+@app.get("/api/order-validator/run/{run_id}")
+def get_order_run(run_id: int, request: Request):
+    require_session(request)
+    conn = get_connection()
+    run = conn.execute("SELECT * FROM order_runs WHERE id=?", (run_id,)).fetchone()
+    conn.close()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    results = _order_results_from_db(run_id) if run["status"] == "completed" else []
+    return {"id": run["id"], "status": run["status"], "total": run["total"],
+            "error": run["error"], "message": run["message"], "results": results}
+
+
+@app.get("/api/order-validator/run/{run_id}/download")
+def download_order_validator(run_id: int, request: Request):
+    require_session(request)
+    conn = get_connection()
+    run = conn.execute("SELECT * FROM order_runs WHERE id=?", (run_id,)).fetchone()
+    conn.close()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    results = _order_results_from_db(run_id)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Order Validator"
+
+    hdr_fill  = PatternFill("solid", fgColor="1F4E79")
+    green     = PatternFill("solid", fgColor="C6EFCE")
+    amber     = PatternFill("solid", fgColor="FFEB9C")
+    red_fill  = PatternFill("solid", fgColor="FFC7CE")
+
+    headers = ["Flag", "BAN-CAN", "Account Status", "MPI Status", "Order Type",
+               "MSISDN", "Order No", "Order Date", "SKU", "Product", "Amount",
+               "Installment ID", "Plan Status", "Plan Description",
+               "Client Instance ID", "Aria Instance No", "Master Plan Instance No",
+               "Order Line Comment", "Acct No"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = hdr_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    for r in results:
+        plan_status  = (r.get("plan_status")  or "").strip()
+        mpi_status   = (r.get("mpi_status")   or "").strip().lower()
+        order_type   = (r.get("order_type")   or "").strip().lower()
+        is_unbilled  = "unbilled" in order_type
+        is_suspended = mpi_status == "suspended"
+        flag = "🔴" if (is_unbilled and is_suspended) else "🟢"
+        fill = red_fill if (is_unbilled and is_suspended) else green
+        row = [flag, r.get("bancan",""), r.get("acct_status",""), r.get("mpi_status",""),
+               r.get("order_type",""), r.get("msisdn",""), r.get("order_no",""),
+               r.get("order_date",""), r.get("sku",""), r.get("product",""),
+               r.get("amount",""), r.get("installment_id",""), plan_status,
+               r.get("plan_description",""), r.get("client_instance_id",""),
+               r.get("aria_instance_no",""), r.get("master_plan_instance_no",""),
+               r.get("order_line_comment",""), r.get("acct_no","")]
+        ws.append(row)
+        if fill:
+            for cell in ws[ws.max_row]:
+                cell.fill = fill
+
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=10)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 60)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"order_validator_{run_id}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+# ── Legacy stub — kept so old NSO validator references don't break ─────────────
+
+def _check_nso_for_bancan(ban_can: str, msisdn: str) -> dict:
+    import json as _json
+    base = {"ban_can": ban_can, "msisdn": msisdn, "account_status": "N/A",
+            "master_plan_status": "N/A", "last_bill_date": "", "status_date": "",
+            "nso_orders": [], "nso_count": 0, "error": None}
+    try:
+        # Single API call — get_acct_details_all_m returns account status, master plan status, dates
+        acct = acct_statusfn(ban_can)
+        status_cd = acct.get("status_cd")
+        base["account_status"] = "Active" if status_cd == 1 else ("Archived" if status_cd == -99 else "Deactivated")
+
+        mp_list = acct.get("master_plans_info") or []
+        if mp_list:
+            base["master_plan_status"] = mp_list[0].get("mp_instance_status_label", "N/A")
+            base["last_bill_date"]     = mp_list[0].get("last_bill_date", "")
+            base["status_date"]        = mp_list[0].get("status_date", "")
+
+        # NSO orders
+        order_resp = requests.post(ARIA_URL_V1, headers=HEADERS, data=_json.dumps({
+            "rest_call": "get_order_m", "output_format": "json",
+            "client_no": ARIA_CLIENT_NO, "auth_key": ARIA_AUTH_KEY, "client_acct_id": ban_can
+        }))
+        nso_orders = []
+        for order in order_resp.json().get("orders", []):
+            order_no = order.get("order_no", "N/A")
+            items_resp = requests.post(ARIA_URL_V1, headers=HEADERS, data=_json.dumps({
+                "rest_call": "get_order_items_m", "output_format": "json",
+                "client_no": ARIA_CLIENT_NO, "auth_key": ARIA_AUTH_KEY, "order_no": order_no
+            }))
+            for item in items_resp.json().get("order_items_list", []):
+                if "Installment_Balance" in item.get("client_sku", ""):
+                    nso_orders.append({
+                        "order_no":     order_no,
+                        "sku":          item.get("client_sku", ""),
+                        "amount":       order.get("amount", ""),
+                        "status":       order.get("status_label", ""),
+                        "invoice_no":   order.get("invoice_no", ""),
+                        "create_date":  order.get("create_date", ""),
+                        "update_date":  order.get("update_date", ""),
+                        "line_comments": item.get("line_comments", ""),
+                    })
+        base["nso_orders"] = nso_orders
+        base["nso_count"]  = len(nso_orders)
+    except Exception as e:
+        base["error"] = str(e)
+    return base
+
+
 
 
 # ── AI Suggestion ─────────────────────────────────────────────────────────────

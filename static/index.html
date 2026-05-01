@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -54,6 +54,8 @@
   .badge-completed { background: rgba(0,230,118,0.12); color: var(--green); }
   .badge-failed    { background: rgba(255,82,82,0.12);  color: var(--red); }
   .badge-stopped   { background: rgba(255,165,0,0.12);  color: var(--amber); }
+  .badge-stopping  { background: rgba(255,165,0,0.18);  color: var(--amber); }
+  .badge-interrupted { background: rgba(255,165,0,0.12); color: var(--amber); }
   .run-item-counts { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
 
   #main { flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -283,10 +285,11 @@
     </div>
   </div>
   <div class="sidebar-section-title">
-    <span>Run History</span>
+    <span id="sidebar-history-label">Run History</span>
     <button id="clear-history-btn" onclick="clearHistory()">🗑 Clear</button>
   </div>
   <div id="run-list"><div class="no-runs">No runs yet</div></div>
+  <div id="nso-run-list" style="display:none;flex:1;overflow-y:auto;padding:0 8px 16px"><div class="no-runs">No NSO runs yet</div></div>
   <div id="logged-in-as"></div>
   <button id="logout-btn" onclick="doLogout()">⏻ Logout</button>
   <div id="copyright">
@@ -299,36 +302,76 @@
 <!-- MAIN -->
 <main id="main">
   <div id="topbar">
-    <div class="mode-tabs">
-      <button class="mode-tab active" id="tab-sf"     onclick="setMode('sf')">☁ Salesforce</button>
-      <button class="mode-tab"        id="tab-manual" onclick="setMode('manual')">✏ Manual MSISDN</button>
+    <!-- ── Main tabs ── -->
+    <div class="mode-tabs" id="main-tabs" style="flex-shrink:0;flex-basis:100%">
+      <button class="mode-tab active" id="tab-disconnect" onclick="setMainTab('disconnect')">⚡ Disconnect Validator</button>
+      <button class="mode-tab"        id="tab-order"      onclick="setMainTab('order')">🔎 Order Validator</button>
     </div>
-    <div class="date-group" id="sf-wrap">
-      <div class="field-wrap">
-        <div class="topbar-label">From (Activated Date)</div>
-        <div class="datetime-pair">
-          <input type="date" id="date-from"/>
-          <input type="time" id="time-from" value="00:00"/>
+
+    <!-- ── Disconnect Validator controls ── -->
+    <div id="disconnect-wrap" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;flex:1">
+      <div class="mode-tabs" style="margin:0">
+        <button class="mode-tab active" id="tab-sf"     onclick="setMode('sf')">☁ SF Run</button>
+        <button class="mode-tab"        id="tab-manual" onclick="setMode('manual')">✏ Manual Run</button>
+      </div>
+      <div class="date-group" id="sf-wrap">
+        <div class="field-wrap">
+          <div class="topbar-label">From (Activated Date)</div>
+          <div class="datetime-pair">
+            <input type="date" id="date-from"/>
+            <input type="time" id="time-from" value="00:00"/>
+          </div>
+        </div>
+        <div class="field-wrap">
+          <div class="topbar-label">To</div>
+          <div class="datetime-pair">
+            <input type="date" id="date-to"/>
+            <input type="time" id="time-to" value="23:59"/>
+          </div>
         </div>
       </div>
-      <div class="field-wrap">
-        <div class="topbar-label">To</div>
-        <div class="datetime-pair">
-          <input type="date" id="date-to"/>
-          <input type="time" id="time-to" value="23:59"/>
-        </div>
+      <div id="manual-wrap">
+        <div class="topbar-label">MSISDNs — one per line or comma separated</div>
+        <textarea id="msisdn-input" placeholder="e.g. 18681234567&#10;18689876543"></textarea>
+        <span id="msisdn-hint">0 numbers entered</span>
+      </div>
+      <button id="run-btn" onclick="startRun()"><span>▶</span> Run Validation</button>
+      <button id="stop-btn" onclick="stopRun()" style="display:none">⏹ Stop</button>
+      <div id="topbar-status" style="display:none">
+        <div class="pulse-dot"></div>
+        <span class="status-text" id="status-text">Fetching from Salesforce...</span>
       </div>
     </div>
-    <div id="manual-wrap">
-      <div class="topbar-label">MSISDNs — one per line or comma separated</div>
-      <textarea id="msisdn-input" placeholder="e.g. 18681234567&#10;18689876543"></textarea>
-      <span id="msisdn-hint">0 numbers entered</span>
-    </div>
-    <button id="run-btn" onclick="startRun()"><span>▶</span> Run Validation</button>
-    <button id="stop-btn" onclick="stopRun()">⏹ Stop</button>
-    <div id="topbar-status" style="display:none">
-      <div class="pulse-dot"></div>
-      <span class="status-text" id="status-text">Fetching from Salesforce...</span>
+
+    <!-- ── Order Validator controls ── -->
+    <div id="order-wrap" style="display:none;align-items:flex-end;gap:10px;flex-wrap:wrap;flex:1">
+      <div class="field-wrap">
+        <div class="topbar-label">Order Date From</div>
+        <input type="date" id="ov-date-from" style="height:32px;padding:0 8px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px"/>
+      </div>
+      <div class="field-wrap">
+        <div class="topbar-label">Order Date To</div>
+        <input type="date" id="ov-date-to" style="height:32px;padding:0 8px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px"/>
+      </div>
+      <div class="field-wrap">
+        <div class="topbar-label">BAN-CAN</div>
+        <input type="text" id="ov-bancan" placeholder="e.g. 12345678-12345000" style="height:32px;padding:0 8px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;width:180px"/>
+      </div>
+      <div class="field-wrap">
+        <div class="topbar-label">MSISDN</div>
+        <input type="text" id="ov-msisdn" placeholder="e.g. 17871234567" style="height:32px;padding:0 8px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;width:140px"/>
+      </div>
+      <div class="field-wrap">
+        <div class="topbar-label">Plan Status</div>
+        <select id="ov-plan-status" style="height:32px;padding:0 8px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px">
+          <option value="">All</option>
+          <option value="Active">Active</option>
+          <option value="Cancelled">Cancelled</option>
+          <option value="Suspended">Suspended</option>
+        </select>
+      </div>
+      <button id="ov-run-btn" onclick="startOrderValidator()"><span>▶</span> Run</button>
+      <button onclick="clearOrderFilters()" style="background:transparent;border:1px solid var(--border);color:var(--text-dim);padding:0 12px;height:32px;border-radius:4px;cursor:pointer;font-size:12px">Clear</button>
     </div>
   </div>
 
@@ -347,6 +390,7 @@
     <button class="sys-tab"        id="sys-tab-matrixx" onclick="setSystemTab('matrixx')">🟠 Matrixx</button>
     <button class="sys-tab"        id="sys-tab-sf"      onclick="setSystemTab('sf')">🟢 Salesforce Asset</button>
     <button class="sys-tab"        id="sys-tab-ai"      onclick="setSystemTab('ai')">🤖 AI Insights</button>
+    <button class="sys-tab"        id="sys-tab-journey" onclick="setSystemTab('journey')">📊 Journey</button>
   </div>
 
   <div id="filter-bar">
@@ -371,6 +415,18 @@
       <div class="empty-icon">📋</div>
       <div class="empty-title">No results loaded</div>
       <div class="empty-sub">Select a date range and click Run Validation to fetch disconnected orders from Salesforce and validate against Aria.</div>
+    </div>
+  </div>
+
+  <!-- Order Validator Panel -->
+  <div id="nso-panel" style="display:none;flex-direction:column;flex:1;overflow:hidden;padding:0;min-height:0">
+    <div id="nso-status-bar" style="padding:10px 16px;font-size:12px;color:var(--text-dim);display:none;flex-shrink:0"></div>
+    <div id="nso-table-wrap" style="flex:1;overflow:auto;min-height:0">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:300px;color:var(--text-dim)">
+        <div style="font-size:36px">🔎</div>
+        <div style="font-size:15px;font-weight:600;margin-top:12px">Order Validator</div>
+        <div style="font-size:12px;margin-top:6px">Apply filters and click Run to query unbilled installment orders.</div>
+      </div>
     </div>
   </div>
 </main>
@@ -742,7 +798,7 @@
     e.textContent='';
     if(!u||!p){e.textContent='❌ Please enter your username and password.';return;}
     try{const res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
-      if(res.ok){const d=await res.json();document.getElementById('login-overlay').classList.add('hidden');document.getElementById('logged-in-as').textContent=`Logged in as ${d.username}`;document.getElementById('login-password').value='';resetInactivityTimer();loadHistory();checkConnections();}
+      if(res.ok){const d=await res.json();document.getElementById('login-overlay').classList.add('hidden');document.getElementById('logged-in-as').textContent=`Logged in as ${d.username}`;document.getElementById('login-password').value='';resetInactivityTimer();loadHistory();loadNSOHistory();checkConnections();}
       else{e.textContent='❌ Invalid username or password. Please try again.';}}
     catch{e.textContent='❌ Login failed. Check your connection and try again.';}
   }
@@ -792,12 +848,230 @@
     catch{st.textContent='❌ Failed to start port-forward.';st.className='conn-modal-status err';}
   }
 
+  let currentMainTab='disconnect';
+
+  function setMainTab(tab){
+    currentMainTab=tab;
+    document.getElementById('tab-disconnect').classList.toggle('active',tab==='disconnect');
+    document.getElementById('tab-order').classList.toggle('active',tab==='order');
+    document.getElementById('disconnect-wrap').style.display=tab==='disconnect'?'flex':'none';
+    document.getElementById('order-wrap').style.display=tab==='order'?'flex':'none';
+    // Content panels
+    document.getElementById('system-tabs').style.display=tab==='disconnect'?'':'none';
+    document.getElementById('filter-bar').style.display=tab==='disconnect'?'':'none';
+    document.getElementById('stats-bar').style.display=tab==='disconnect'?'':'none';
+    document.getElementById('table-wrap').style.display=tab==='disconnect'?'':'none';
+    if(tab==='order')document.getElementById('progress-wrap').style.display='none';
+    const nsoPanel=document.getElementById('nso-panel');
+    nsoPanel.style.display=tab==='order'?'flex':'none';
+    if(tab==='order')nsoPanel.style.flexDirection='column';
+    // Sidebar
+    document.getElementById('run-list').style.display=tab==='disconnect'?'':'none';
+    document.getElementById('nso-run-list').style.display=tab==='order'?'block':'none';
+    document.getElementById('sidebar-history-label').textContent=tab==='order'?'Order Run History':'Run History';
+    document.getElementById('clear-history-btn').style.display=tab==='order'?'none':'';
+    if(tab==='order')loadOrderHistory();
+  }
+
   function setMode(mode){
     currentMode=mode;
     document.getElementById('tab-sf').classList.toggle('active',mode==='sf');
     document.getElementById('tab-manual').classList.toggle('active',mode==='manual');
     document.getElementById('sf-wrap').style.display=mode==='sf'?'flex':'none';
     document.getElementById('manual-wrap').classList.toggle('visible',mode==='manual');
+  }
+
+  let _nsoCurrentRunId=null, _nsoPoller=null, _nsoMode='sf';
+
+  function setNSOMode(mode){
+    _nsoMode=mode;
+    document.getElementById('nso-tab-sf').classList.toggle('active',mode==='sf');
+    document.getElementById('nso-tab-manual').classList.toggle('active',mode==='manual');
+    document.getElementById('nso-sf-wrap').style.display=mode==='sf'?'flex':'none';
+    document.getElementById('nso-manual-wrap').style.display=mode==='manual'?'block':'none';
+  }
+
+  document.getElementById('bancan-input')?.addEventListener('input',()=>{
+    const n=(document.getElementById('bancan-input').value||'').split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
+    document.getElementById('bancan-hint').textContent=`${n.length} entered`;
+  });
+
+  function clearOrderFilters(){
+    document.getElementById('ov-date-from').value='';
+    document.getElementById('ov-date-to').value='';
+    document.getElementById('ov-bancan').value='';
+    document.getElementById('ov-msisdn').value='';
+    document.getElementById('ov-plan-status').value='';
+  }
+
+  async function startOrderValidator(){
+    const sb=document.getElementById('nso-status-bar');
+    const dateFrom=document.getElementById('ov-date-from').value||'';
+    const dateTo=document.getElementById('ov-date-to').value||'';
+    const bancan=document.getElementById('ov-bancan').value||'';
+    const msisdn=document.getElementById('ov-msisdn').value||'';
+    const planStatus=document.getElementById('ov-plan-status').value||'';
+    const hasFilter=dateFrom||dateTo||bancan||msisdn||planStatus;
+    if(!hasFilter){
+      sb.style.display='block'; sb.style.color='var(--amber)';
+      sb.textContent='⚠️ No filters set — this will scan the full table and may take 3–5 minutes. Add a date range or BAN-CAN to speed it up.';
+    }
+    const body=JSON.stringify({date_from:dateFrom,date_to:dateTo,bancan,msisdn,plan_status:planStatus});
+    document.getElementById('nso-table-wrap').innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:300px;color:var(--text-dim)"><div style="font-size:36px">⏳</div><div style="font-size:14px;margin-top:12px">Starting query…</div></div>`;
+    if(hasFilter){sb.style.display='block'; sb.style.color=''; sb.textContent='Starting…';}
+    try{
+      const res=await fetch('/api/order-validator/run',{method:'POST',headers:{'Content-Type':'application/json'},body});
+      const d=await res.json();
+      _nsoCurrentRunId=d.run_id;
+      if(_nsoPoller)clearInterval(_nsoPoller);
+      _nsoPoller=setInterval(pollOrderValidator,2000);
+      loadOrderHistory();
+    }catch(e){sb.textContent='❌ Failed to start.';sb.style.color='var(--red)';}
+  }
+
+  async function stopOrderValidator(){
+    if(!_nsoCurrentRunId)return;
+    try{
+      await fetch(`/api/order-validator/run/${_nsoCurrentRunId}/stop`,{method:'POST'});
+      const sb=document.getElementById('nso-status-bar');
+      sb.style.display='block'; sb.style.color='var(--amber)';
+      sb.textContent='⏳ Stop requested — waiting for current query to finish…';
+    }catch{}
+  }
+
+  async function pollOrderValidator(){
+    if(!_nsoCurrentRunId)return;
+    try{
+      const d=await(await fetch(`/api/order-validator/run/${_nsoCurrentRunId}`)).json();
+      const sb=document.getElementById('nso-status-bar');
+      sb.style.display='block';
+      if(d.status==='running'||d.status==='stopping'){
+        sb.style.color= d.status==='stopping'?'var(--amber)':'';
+        sb.textContent=`⏳ ${d.message||'Querying database…'}`;
+        loadOrderHistory();
+      } else if(d.status==='completed'){
+        sb.style.color='';
+        sb.textContent=`✅ Completed — ${d.total} record${d.total!==1?'s':''} found`;
+        clearInterval(_nsoPoller); _nsoPoller=null;
+        loadOrderHistory();
+        if(d.results&&d.results.length)renderOrderTable(d.results,d.id);
+        else document.getElementById('nso-table-wrap').innerHTML=`<div style="padding:40px;text-align:center;color:var(--text-dim)">No records found for the selected filters.</div>`;
+      } else if(d.status==='stopped'){
+        sb.style.color='var(--amber)';
+        sb.textContent='⏹ Stopped by user.';
+        clearInterval(_nsoPoller); _nsoPoller=null;
+        loadOrderHistory();
+      } else {
+        sb.textContent=`❌ Failed: ${d.error||'Unknown error'}`;
+        sb.style.color='var(--red)';
+        clearInterval(_nsoPoller); _nsoPoller=null;
+        loadOrderHistory();
+      }
+    }catch{}
+  }
+
+  function renderOrderTable(results, runId){
+    const wrap=document.getElementById('nso-table-wrap');
+    if(!results.length){wrap.innerHTML=`<div style="padding:40px;text-align:center;color:var(--text-dim)">No records found.</div>`;return;}
+    const rows=results.map(r=>{
+      const ps=(r.plan_status||'').trim();
+      const psColor=ps.toLowerCase()==='active'?'var(--green)':ps?'var(--amber)':'var(--text-dim)';
+      const amt=r.amount?parseFloat(r.amount).toFixed(2):'';
+      const acctColor=(r.acct_status||'').toLowerCase()==='active'?'var(--green)':'var(--amber)';
+      const mpiColor=(r.mpi_status||'').toLowerCase()==='active'?'var(--green)':'var(--amber)';
+      const isUnbilled=(r.order_type||'').toLowerCase().includes('unbilled');
+      const isSuspended=(r.mpi_status||'').toLowerCase()==='suspended';
+      const flag=(isUnbilled&&isSuspended)?'🔴':'🟢';
+      return `<tr>
+        <td style="text-align:center;font-size:16px">${flag}</td>
+        <td style="font-weight:600;color:var(--accent);font-family:var(--mono)">${r.bancan||'—'}</td>
+        <td><span style="color:${acctColor};font-weight:600">${r.acct_status||'—'}</span></td>
+        <td><span style="color:${mpiColor};font-weight:600">${r.mpi_status||'—'}</span></td>
+        <td style="font-size:11px;color:var(--text-dim)">${r.order_type||'—'}</td>
+        <td style="font-family:var(--mono)">${r.msisdn||'—'}</td>
+        <td>${r.order_no||'—'}</td>
+        <td>${r.order_date||'—'}</td>
+        <td style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.sku||''}">${r.sku||'—'}</td>
+        <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.product||''}">${r.product||'—'}</td>
+        <td style="text-align:right;font-family:var(--mono)">${amt}</td>
+        <td style="font-family:var(--mono);font-size:11px">${r.installment_id||'—'}</td>
+        <td><span style="color:${psColor};font-weight:600">${ps||'—'}</span></td>
+        <td style="font-size:10px;color:var(--text-dim);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.order_line_comment||''}">${r.order_line_comment||'—'}</td>
+        <td style="font-size:11px">${r.aria_instance_no||'—'}</td>
+        <td style="font-size:11px">${r.client_instance_id||'—'}</td>
+      </tr>`;
+    }).join('');
+    const dlBtn=runId?`<div style="padding:8px 16px;flex-shrink:0"><button onclick="downloadOrderResults(${runId})" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px">⬇ Download Excel</button></div>`:'';
+    wrap.innerHTML=`${dlBtn}<table>
+      <thead><tr>
+        <th>Flag</th><th>BAN-CAN</th><th>Account Status</th><th>MPI Status</th><th>Order Type</th>
+        <th>MSISDN</th><th>Order No</th><th>Order Date</th><th>SKU</th><th>Product</th>
+        <th>Amount</th><th>Installment ID</th><th>Plan Status</th>
+        <th>Line Comment</th><th>Aria Instance</th><th>Client Instance ID</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  function downloadOrderResults(runId){
+    window.location.href=`/api/order-validator/run/${runId}/download`;
+  }
+
+  async function loadOrderHistory(){
+    try{
+      const runs=await(await fetch('/api/order-validator/runs')).json();
+      renderOrderHistory(runs);
+      if(!_nsoPoller){
+        const active=runs.find(r=>r.status==='running'||r.status==='stopping');
+        if(active){_nsoCurrentRunId=active.id;_nsoPoller=setInterval(pollOrderValidator,2000);}
+      }
+    }catch{}
+  }
+
+  function renderOrderHistory(runs){
+    const el=document.getElementById('nso-run-list');
+    if(!runs||!runs.length){el.innerHTML='<div class="no-runs">No order runs yet</div>';return;}
+    el.innerHTML=runs.map(r=>{
+      const inProgress=r.status==='running'||r.status==='stopping';
+      const icon=r.status==='running'?'🔄':r.status==='stopping'?'⏳':r.status==='completed'?'✅':r.status==='stopped'?'⏹':r.status==='interrupted'?'⏹':'❌';
+      const stopBtn=inProgress?`<button onclick="event.stopPropagation();stopOrderValidator()" title="Force stop" style="background:var(--red);color:#fff;border:none;border-radius:3px;padding:2px 6px;cursor:pointer;font-size:10px;margin-left:4px">■ Stop</button>`:'';
+      const delBtn=!inProgress?`<button onclick="event.stopPropagation();deleteOrderRun(${r.id})" title="Delete" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:13px;padding:2px 4px;margin-left:4px" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text-dim)'">🗑</button>`:'';
+      return `<div class="run-item ${r.id===_nsoCurrentRunId?'active':''}" onclick="loadOrderRun(${r.id})">
+        <div class="run-item-dates" style="display:flex;align-items:center;justify-content:space-between">${icon} Order Validator<span>${stopBtn}${delBtn}</span></div>
+        <div class="run-item-meta"><span class="run-item-time">${formatTime(r.triggered_at)}</span><span class="badge badge-${r.status}">${r.status}</span></div>
+        <div class="run-item-counts">${r.total||0} record${r.total!==1?'s':''}</div>
+      </div>`;
+    }).join('');
+  }
+
+  async function deleteOrderRun(runId){
+    if(!confirm('Delete this run and its results?'))return;
+    try{
+      const res=await fetch(`/api/order-validator/run/${runId}`,{method:'DELETE'});
+      if(!res.ok){const e=await res.json();alert(e.detail||'Delete failed');return;}
+      if(_nsoCurrentRunId===runId){
+        _nsoCurrentRunId=null;
+        document.getElementById('nso-status-bar').style.display='none';
+        document.getElementById('nso-table-wrap').innerHTML='';
+      }
+      loadOrderHistory();
+    }catch(e){alert('Delete failed');}
+  }
+
+  async function loadOrderRun(runId){
+    _nsoCurrentRunId=runId;
+    const d=await(await fetch(`/api/order-validator/run/${runId}`)).json();
+    const sb=document.getElementById('nso-status-bar');
+    sb.style.display='block';
+    const inProgress=d.status==='running'||d.status==='stopping';
+    sb.style.color=d.status==='stopping'?'var(--amber)':d.status==='stopped'?'var(--amber)':'';
+    sb.textContent=inProgress?`⏳ ${d.message||'Querying database…'}`
+      :d.status==='completed'?`✅ Completed — ${d.total} record${d.total!==1?'s':''} found`
+      :d.status==='stopped'?'⏹ Stopped by user.'
+      :`❌ Failed: ${d.error||'Unknown error'}`;
+    if(d.results&&d.results.length)renderOrderTable(d.results,d.id);
+    if(inProgress&&!_nsoPoller)_nsoPoller=setInterval(pollOrderValidator,2000);
+    loadOrderHistory();
   }
 
   document.getElementById('msisdn-input').addEventListener('input',()=>{
@@ -813,11 +1087,13 @@
     document.getElementById('sys-tab-matrixx').classList.toggle('active',tab==='matrixx');
     document.getElementById('sys-tab-sf').classList.toggle('active',tab==='sf');
     document.getElementById('sys-tab-ai').classList.toggle('active',tab==='ai');
+    document.getElementById('sys-tab-journey').classList.toggle('active',tab==='journey');
     updateStats();
     if(tab==='aria')applyFilter();
     else if(tab==='matrixx')renderMatrixxTable();
     else if(tab==='sf')renderSFAssetTable();
     else if(tab==='ai')renderAIInsights();
+    else if(tab==='journey')renderJourney();
   }
 
   async function renderAIInsights(){
@@ -950,7 +1226,7 @@
 
     document.getElementById('download-btn').disabled=false;
     updateStats();
-    if(currentSystemTab==='aria')applyFilter();else if(currentSystemTab==='matrixx')renderMatrixxTable();else if(currentSystemTab==='sf')renderSFAssetTable();else if(currentSystemTab==='ai')renderAIInsights();
+    if(currentSystemTab==='aria')applyFilter();else if(currentSystemTab==='matrixx')renderMatrixxTable();else if(currentSystemTab==='sf')renderSFAssetTable();else if(currentSystemTab==='ai')renderAIInsights();else if(currentSystemTab==='journey')renderJourney();
     loadHistory();
   }
 
@@ -1275,6 +1551,222 @@
       else closeDetailModal();
     }
   });
+
+  // Sankey Journey
+
+  function _journeyCountByState(map) {
+    const r = { clean: 0, action: 0, error: 0 };
+    for (const v of Object.values(map)) r[v] = (r[v] || 0) + 1;
+    return r;
+  }
+
+  function _journeyFlowMatrix(msisdns, fromFn, toFn) {
+    const m = {};
+    for (const ms of msisdns) {
+      const f = fromFn(ms), t = toFn(ms);
+      if (!m[f]) m[f] = {};
+      m[f][t] = (m[f][t] || 0) + 1;
+    }
+    return m;
+  }
+
+  function renderJourney() {
+    const wrap = document.getElementById('table-wrap');
+    if (!allResults.length) {
+      wrap.innerHTML = '<div id="empty-state"><div class="empty-icon">&#x1F4CA;</div><div class="empty-title">No results loaded</div><div class="empty-sub">Run a validation first to see the disconnect journey flow.</div></div>';
+      return;
+    }
+
+    const total = allResults.length;
+    const norm = v => v === '✅' ? 'clean' : v === '⚠️' ? 'action' : 'error';
+
+    const ariaV = {}, mtxV = {}, sfV = {};
+    allResults.forEach(r => ariaV[r.msisdn] = norm(r.validation));
+    allMatrixxResults.forEach(r => mtxV[r.msisdn] = norm(r.mtx_validation));
+    allSFAssetResults.forEach(r => sfV[r.msisdn] = norm(r.sf_validation));
+
+    const msisdns = allResults.map(r => r.msisdn);
+    const STATES = ['clean', 'action', 'error'];
+    const C = { clean: '#00e676', action: '#ffab00', error: '#ff5252' };
+    const LABEL = { clean: 'Clean', action: 'Action Needed', error: 'Error' };
+
+    const segMs = {
+      source: { clean: [...msisdns], action: [], error: [] },
+      aria:   { clean: [], action: [], error: [] },
+      mtx:    { clean: [], action: [], error: [] },
+      sf:     { clean: [], action: [], error: [] },
+    };
+    msisdns.forEach(m => {
+      segMs.aria[ariaV[m] || 'error'].push(m);
+      segMs.mtx[mtxV[m]  || 'error'].push(m);
+      segMs.sf[sfV[m]    || 'error'].push(m);
+    });
+
+    const colData = [
+      { id: 'source', label: 'Disconnect Orders', icon: '\u{1F4CB}', counts: { clean: total, action: 0, error: 0 } },
+      { id: 'aria',   label: 'Aria',        icon: '\u{1F535}', counts: _journeyCountByState(ariaV) },
+      { id: 'mtx',    label: 'Matrixx',     icon: '\u{1F7E0}', counts: _journeyCountByState(mtxV)  },
+      { id: 'sf',     label: 'Salesforce',  icon: '\u{1F7E2}', counts: _journeyCountByState(sfV)   },
+    ];
+
+    const flows = [
+      _journeyFlowMatrix(msisdns, () => 'clean', m => ariaV[m] || 'error'),
+      _journeyFlowMatrix(msisdns, m => ariaV[m] || 'error', m => mtxV[m] || 'error'),
+      _journeyFlowMatrix(msisdns, m => mtxV[m]  || 'error', m => sfV[m]  || 'error'),
+    ];
+
+    const W = 960, H = 440;
+    const BAR_W = 14, BAR_H = 300, BAR_TOP = 96, GAP = 5;
+    const COL_X = [80, 296, 522, 748];
+
+    function colSegs(counts, x) {
+      const segs = {};
+      let y = BAR_TOP;
+      const active = STATES.filter(s => counts[s] > 0);
+      const availH = BAR_H - (active.length - 1) * GAP;
+      for (const s of STATES) {
+        const h = total > 0 ? (counts[s] / total) * availH : 0;
+        segs[s] = { x, y, h, count: counts[s] };
+        if (h > 0) y += h + GAP;
+      }
+      return segs;
+    }
+
+    const allSegs = colData.map((c, i) => colSegs(c.counts, COL_X[i]));
+
+    let pathsSVG = '', barsSVG = '', labelsSVG = '';
+
+    for (let ci = 0; ci < flows.length; ci++) {
+      const matrix   = flows[ci];
+      const fromSegs = allSegs[ci];
+      const toSegs   = allSegs[ci + 1];
+      const fromX = COL_X[ci] + BAR_W;
+      const toX   = COL_X[ci + 1];
+      const cx    = (fromX + toX) / 2;
+      const fromUsed = { clean: 0, action: 0, error: 0 };
+      const toUsed   = { clean: 0, action: 0, error: 0 };
+
+      const pairs = [];
+      for (const f of STATES) for (const t of STATES) pairs.push([f, t]);
+      pairs.sort((a, b) => (b[0]===b[1]?1:0) - (a[0]===a[1]?1:0));
+
+      for (const [fState, tState] of pairs) {
+        const count = (matrix[fState] || {})[tState] || 0;
+        if (!count) continue;
+        const fSeg = fromSegs[fState], tSeg = toSegs[tState];
+        if (!fSeg.h || !tSeg.h) continue;
+
+        const fBandH = (count / fSeg.count) * fSeg.h;
+        const tBandH = (count / tSeg.count) * tSeg.h;
+        const y1 = fSeg.y + fromUsed[fState], y2 = y1 + fBandH;
+        const y3 = tSeg.y + toUsed[tState],   y4 = y3 + tBandH;
+        fromUsed[fState] += fBandH;
+        toUsed[tState]   += tBandH;
+
+        const isSame = fState === tState;
+        const col  = isSame ? C[fState] : (fState==='clean'?'#4db6ff':fState==='action'?'#ffd54f':'#ff8a80');
+        const opN  = isSame ? '0.82' : '0.68';
+        const opH  = isSame ? '0.96' : '0.88';
+        const fId  = colData[ci].id, tId = colData[ci+1].id;
+
+        pathsSVG += `<path d="M${fromX},${y1} C${cx},${y1} ${cx},${y3} ${toX},${y3} L${toX},${y4} C${cx},${y4} ${cx},${y2} ${fromX},${y2} Z" fill="${col}" opacity="${opN}" style="cursor:pointer" onclick="showJourneyFlow('${fId}','${fState}','${tId}','${tState}')" onmouseover="this.setAttribute('opacity','${opH}')" onmouseout="this.setAttribute('opacity','${opN}')"/>`;
+      }
+    }
+
+    for (let ci = 0; ci < colData.length; ci++) {
+      const col = colData[ci], segs = allSegs[ci], cx = COL_X[ci];
+      const tot = STATES.reduce((s, k) => s + col.counts[k], 0);
+      labelsSVG += `<text x="${cx+BAR_W/2}" y="${BAR_TOP-30}" text-anchor="middle" font-size="10" font-weight="700" fill="#e2e8f0" font-family="IBM Plex Sans,sans-serif">${col.icon} ${col.label}</text>`;
+      labelsSVG += `<text x="${cx+BAR_W/2}" y="${BAR_TOP-13}" text-anchor="middle" font-size="13" font-weight="700" fill="#00c6ff" font-family="IBM Plex Mono,monospace">${tot}</text>`;
+      for (const s of STATES) {
+        const seg = segs[s];
+        if (seg.h < 1) continue;
+        barsSVG += `<rect x="${cx}" y="${seg.y}" width="${BAR_W}" height="${seg.h}" fill="${C[s]}" rx="3" opacity="1" style="cursor:pointer" onclick="showJourneySegment('${col.id}','${s}')" onmouseover="this.setAttribute('opacity','0.85')" onmouseout="this.setAttribute('opacity','1')"/>`;
+        // count label beside bar (left side for col 0, right side otherwise)
+        if (seg.h >= 10 && seg.count > 0) {
+          const lx = ci === 0 ? cx - 6 : cx + BAR_W + 6;
+          const anchor = ci === 0 ? 'end' : 'start';
+          barsSVG += `<text x="${lx}" y="${seg.y+seg.h/2+4}" text-anchor="${anchor}" font-size="10" font-weight="700" fill="${C[s]}" font-family="IBM Plex Mono,monospace" style="pointer-events:none">${seg.count}</text>`;
+        }
+        if (ci === colData.length-1 && seg.h >= 10) {
+          const pct = Math.round((seg.count/total)*100);
+          barsSVG += `<text x="${cx+BAR_W+28}" y="${seg.y+seg.h/2+4}" font-size="10" fill="${C[s]}" font-family="IBM Plex Mono,monospace" style="pointer-events:none">${pct}%</text>`;
+        }
+      }
+    }
+
+    const lY = BAR_TOP + BAR_H + 26, lx0 = W/2 - 195;
+    let legendSVG = '';
+    STATES.forEach((s, i) => {
+      const lx = lx0 + i * 155;
+      legendSVG += `<rect x="${lx}" y="${lY}" width="12" height="12" fill="${C[s]}" rx="2"/>`;
+      legendSVG += `<text x="${lx+18}" y="${lY+10}" font-size="10" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif">${LABEL[s]}</text>`;
+    });
+
+    const svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${W}px;height:auto;display:block;margin:0 auto">
+      <rect width="${W}" height="${H}" fill="#0a0e1a" rx="8"/>
+      <text x="${W/2}" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#e2e8f0" font-family="IBM Plex Sans,sans-serif">Disconnect Journey - ${total} MSISDN${total!==1?'s':''}</text>
+      <text x="${W/2}" y="42" text-anchor="middle" font-size="10" fill="#64748b" font-family="IBM Plex Sans,sans-serif">Click any bar or flow band to drill into the MSISDNs</text>
+      ${pathsSVG}${barsSVG}${labelsSVG}${legendSVG}
+    </svg>`;
+
+    window._jAriaV = ariaV; window._jMtxV = mtxV; window._jSfV = sfV;
+    window._jSeg = segMs;   window._jMs = msisdns;
+
+    wrap.innerHTML = `<div style="padding:20px;overflow:auto">
+      ${svg}
+      <div id="journey-detail" style="margin-top:14px;padding:14px 18px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text-dim);text-align:center;font-size:12px;font-family:var(--mono)">
+        Click any segment or flow band to see the MSISDNs
+      </div>
+    </div>`;
+  }
+
+  function showJourneySegment(sysId, state) {
+    const list = window._jSeg?.[sysId]?.[state] || [];
+    const sysName = {source:'Orders',aria:'Aria',mtx:'Matrixx',sf:'Salesforce'}[sysId];
+    const stName  = state==='clean'?'✅ Clean':state==='action'?'⚠️ Action Needed':'❌ Error';
+    _renderJourneyDetail(`${sysName} — ${stName} (${list.length})`, list);
+  }
+
+  function showJourneyFlow(fromId, fromState, toId, toState) {
+    const ariaV=window._jAriaV||{}, mtxV=window._jMtxV||{}, sfV=window._jSfV||{};
+    const fn=(id,m)=>id==='source'?'clean':id==='aria'?(ariaV[m]||'error'):id==='mtx'?(mtxV[m]||'error'):(sfV[m]||'error');
+    const list=(window._jMs||[]).filter(m=>fn(fromId,m)===fromState&&fn(toId,m)===toState);
+    const SL={source:'Orders',aria:'Aria',mtx:'Matrixx',sf:'Salesforce'};
+    const ST=s=>s==='clean'?'✅ Clean':s==='action'?'⚠️ Action':'❌ Error';
+    _renderJourneyDetail(`${SL[fromId]} ${ST(fromState)} → ${SL[toId]} ${ST(toState)} (${list.length})`, list);
+  }
+
+  function _renderJourneyDetail(title, list) {
+    const panel = document.getElementById('journey-detail');
+    if (!panel) return;
+    if (!list.length) { panel.innerHTML=`<div style="text-align:center;color:var(--text-dim)">${title} — No records</div>`; return; }
+    const rows = list.map(m => {
+      const ar=allResults.find(r=>r.msisdn===m), mx=allMatrixxResults.find(r=>r.msisdn===m), sf=allSFAssetResults.find(r=>r.msisdn===m);
+      return `<tr onclick="openDetailModal('${m}')" style="cursor:pointer;border-bottom:1px solid var(--border)" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+        <td style="padding:7px 14px;color:var(--accent);font-weight:600;font-family:var(--mono)">${m}</td>
+        <td style="padding:7px 14px;font-family:var(--mono)">${ar?.ban_can||'—'}</td>
+        <td style="padding:7px 14px;text-align:center;font-size:15px">${ar?.validation||'—'}</td>
+        <td style="padding:7px 14px;text-align:center;font-size:15px">${mx?.mtx_validation||'—'}</td>
+        <td style="padding:7px 14px;text-align:center;font-size:15px">${sf?.sf_validation||'—'}</td>
+        <td style="padding:7px 14px;font-size:10px;color:var(--text-dim);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${ar?.field_to_review||''}">${ar?.field_to_review||'—'}</td>
+      </tr>`;
+    }).join('');
+    panel.innerHTML = `
+      <div style="font-weight:700;color:var(--text);margin-bottom:10px;font-size:13px;font-family:var(--sans)">${title}</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="color:var(--text-dim);font-size:10px;text-transform:uppercase;letter-spacing:0.8px;border-bottom:1px solid var(--border)">
+          <th style="padding:6px 14px;text-align:left">MSISDN</th>
+          <th style="padding:6px 14px;text-align:left">BAN-CAN</th>
+          <th style="padding:6px 14px;text-align:center">Aria</th>
+          <th style="padding:6px 14px;text-align:center">Matrixx</th>
+          <th style="padding:6px 14px;text-align:center">Salesforce</th>
+          <th style="padding:6px 14px;text-align:left">Fields to Review</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <div style="margin-top:8px;font-size:10px;color:var(--text-muted);text-align:right">Click any row to open full details &amp; actions</div>`;
+  }
 </script>
 </body>
 </html>

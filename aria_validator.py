@@ -311,6 +311,7 @@ def process_single(msisdn: str, activated_date: str = None, order_ban: str = Non
                 if plan_status_date_check > datetime.now() - timedelta(days=3):
                     possible_reactivation = True
 
+
         # ── If reactivation detected — no further checks needed ───────────
         if possible_reactivation:
             return {
