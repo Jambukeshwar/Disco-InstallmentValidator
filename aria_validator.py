@@ -146,7 +146,7 @@ def nsodetails(child_plan1_name, user_id, string_details, msisdn):
                         Invoice_No = order.get("invoice_no", "")
                         Create_Date = order.get("create_date", "")
                         Update_Date = order.get("update_date", "")
-                    elif NSOInstallmentIDs == "" and modifiedamt == Installremamt:
+                    elif NSOInstallmentIDs == "" and round(float(modifiedamt), 2) == round(float(Installremamt), 2):
                         NSOExist = 'Same_Amt without_InstID'
                         OrderNo = order.get('order_no', 'N/A')
                         Amount = order.get("amount", "")
@@ -154,7 +154,7 @@ def nsodetails(child_plan1_name, user_id, string_details, msisdn):
                         Invoice_No = order.get("invoice_no", "")
                         Create_Date = order.get("create_date", "")
                         Update_Date = order.get("update_date", "")
-                    elif msisdn == msisdn_comments and modifiedamt == Installremamt:
+                    elif msisdn == msisdn_comments and round(float(modifiedamt), 2) == round(float(Installremamt), 2):
                         NSOExist = 'Same_Amt & MSISDN with Wrong_InstID'
                         OrderNo = order.get('order_no', 'N/A')
                         Amount = order.get("amount", "")

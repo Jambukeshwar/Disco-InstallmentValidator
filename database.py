@@ -184,5 +184,24 @@ def init_db():
     if "message" not in existing_order_runs:
         c.execute("ALTER TABLE order_runs ADD COLUMN message TEXT")
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS scheduler_config (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    # Seed defaults (INSERT OR IGNORE = don't overwrite user-set values)
+    defaults = [
+        ("enabled",          "true"),
+        ("trigger_hour",     "8"),
+        ("trigger_minute",   "0"),
+        ("report_range",     "yesterday"),
+        ("smtp_to",          os.getenv("SMTP_TO", "")),
+        ("smtp_sender_name", os.getenv("SMTP_SENDER_NAME", "ITOps Automation")),
+        ("subject_prefix",   os.getenv("SMTP_SUBJECT_PREFIX", "Disconnect Validation Suite - Report")),
+    ]
+    for k, v in defaults:
+        c.execute("INSERT OR IGNORE INTO scheduler_config (key, value) VALUES (?,?)", (k, v))
+
     conn.commit()
     conn.close()

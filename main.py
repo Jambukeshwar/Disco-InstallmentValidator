@@ -1,7 +1,8 @@
 import io
 import os
 import requests
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timezone, timedelta
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, Response
@@ -21,6 +22,9 @@ from matrixx_actions import deactivate_device
 import matrixx_validator
 import sf_asset_validator
 from auth import init_auth_db, verify_login, logout as auth_logout, get_session
+from email_report import build_html_body, send_report, build_connectivity_alert_html, send_alert
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 load_dotenv()
 
@@ -36,6 +40,8 @@ app.add_middleware(
 init_db()
 init_auth_db()
 
+_scheduler = BackgroundScheduler(timezone="UTC")
+
 # Reset any runs left in "running" state from a previous crashed/restarted process
 _startup_conn = get_connection()
 _startup_conn.execute("UPDATE runs SET status='interrupted' WHERE status='running'")
@@ -45,6 +51,16 @@ _startup_conn.close()
 
 
 # ── Pydantic models ────────────────────────────────────────────────────────────
+
+class SchedulerConfigRequest(BaseModel):
+    enabled:          bool
+    trigger_hour:     int
+    trigger_minute:   int
+    report_range:     str
+    smtp_to:          str
+    smtp_sender_name: str
+    subject_prefix:   str
+
 
 class RunRequest(BaseModel):
     date_from: str
@@ -915,17 +931,23 @@ def get_run_status(run_id: int, request: Request):
     return dict(run)
 
 
-@app.get("/api/runs/{run_id}/download")
-def download_run(run_id: int, request: Request):
-    require_session(request)
+def _build_excel_bytes(run_id: int):
+    """Build Excel report for a run and return (bytes, filename) tuple."""
     conn = get_connection()
     run = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
     if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise ValueError(f"Run {run_id} not found")
     aria_results = conn.execute("SELECT * FROM results          WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
     mtx_results  = conn.execute("SELECT * FROM matrixx_results  WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
     sf_results   = conn.execute("SELECT * FROM sf_asset_results WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
     conn.close()
+    buf, filename = _build_excel_workbook(run, aria_results, mtx_results, sf_results)
+    return buf.getvalue(), filename
+
+
+def _build_excel_workbook(run, aria_results, mtx_results, sf_results):
+    """Build the Excel workbook and return (BytesIO, filename)."""
+    run_d = dict(run)
 
     header_fill = PatternFill("solid", fgColor="1E3A5F")
     header_font = Font(bold=True, color="FFFFFF")
@@ -953,9 +975,122 @@ def download_run(run_id: int, request: Request):
 
     wb = openpyxl.Workbook()
 
+    # ── Sheet 1: Summary
+    ws0 = wb.active
+    ws0.title = "Summary"
+
+    title_font   = Font(bold=True, size=13, color="FFFFFF")
+    title_fill   = PatternFill("solid", fgColor="1E3A5F")
+    section_font = Font(bold=True, size=11, color="1E3A5F")
+    label_font   = Font(bold=True)
+    green_fill   = PatternFill("solid", fgColor="E8F5E9")
+    amber_fill   = PatternFill("solid", fgColor="FFF8E1")
+    red_fill     = PatternFill("solid", fgColor="FFEBEE")
+    grey_fill    = PatternFill("solid", fgColor="F5F5F5")
+
+    def s_cell(ws, row, col, value, font=None, fill=None, align="left"):
+        c = ws.cell(row=row, column=col, value=value)
+        if font:  c.font = font
+        if fill:  c.fill = fill
+        c.alignment = Alignment(horizontal=align)
+        return c
+
+    run_d = dict(run)
+    is_manual = run_d.get("date_from") == "manual"
+    date_label = "Manual Run" if is_manual else f"{run_d.get('date_from')} {run_d.get('time_from','00:00')} → {run_d.get('date_to')} {run_d.get('time_to','23:59')}"
+
+    # Title
+    s_cell(ws0, 1, 1, "Disco Validator — Run Summary", font=Font(bold=True, size=14, color="FFFFFF"), fill=PatternFill("solid", fgColor="1E3A5F"), align="left")
+    ws0.merge_cells("A1:D1")
+
+    # Run info
+    row = 3
+    s_cell(ws0, row, 1, "Run Period",     font=label_font, fill=grey_fill)
+    s_cell(ws0, row, 2, date_label,       fill=grey_fill)
+    row += 1
+    s_cell(ws0, row, 1, "Generated At",   font=label_font, fill=grey_fill)
+    s_cell(ws0, row, 2, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), fill=grey_fill)
+
+    # Overall counts
+    row += 2
+    s_cell(ws0, row, 1, "Overall", font=section_font)
+    row += 1
+    for col, h in enumerate(["Metric", "Count"], 1):
+        s_cell(ws0, row, col, h, font=Font(bold=True, color="FFFFFF"), fill=PatternFill("solid", fgColor="37474F"), align="center")
+    row += 1
+    aria_list = [dict(x) for x in aria_results]
+    mtx_list  = [dict(x) for x in mtx_results]
+    sf_list   = [dict(x) for x in sf_results]
+    total = len(aria_list)
+    clean = sum(1 for r in aria_list if r.get("validation") == "✅")
+    warn  = sum(1 for r in aria_list if r.get("validation") == "⚠️")
+    err   = sum(1 for r in aria_list if r.get("validation") not in ("✅", "⚠️") and r.get("validation"))
+    for label, val, fill in [("Total Records", total, None), ("Clean ✅", clean, green_fill), ("Action Needed ⚠️", warn, amber_fill), ("Errors ❌", err, red_fill)]:
+        s_cell(ws0, row, 1, label, fill=fill)
+        s_cell(ws0, row, 2, val,   fill=fill, align="center")
+        row += 1
+
+    # Per-system breakdown
+    row += 1
+    s_cell(ws0, row, 1, "Per-System Breakdown", font=section_font)
+    row += 1
+    for col, h in enumerate(["System", "Clean ✅", "Action Needed ⚠️", "Errors ❌"], 1):
+        s_cell(ws0, row, col, h, font=Font(bold=True, color="FFFFFF"), fill=PatternFill("solid", fgColor="37474F"), align="center")
+    row += 1
+    systems = [
+        ("Aria",        aria_list, "validation"),
+        ("Matrixx",     mtx_list,  "mtx_validation"),
+        ("SF Asset",    sf_list,   "sf_validation"),
+    ]
+    for sys_name, sys_list, vkey in systems:
+        sc = sum(1 for r in sys_list if r.get(vkey) == "✅")
+        sw = sum(1 for r in sys_list if r.get(vkey) == "⚠️")
+        se = sum(1 for r in sys_list if r.get(vkey) not in ("✅", "⚠️") and r.get(vkey))
+        s_cell(ws0, row, 1, sys_name, font=label_font)
+        s_cell(ws0, row, 2, sc, fill=green_fill, align="center")
+        s_cell(ws0, row, 3, sw, fill=amber_fill, align="center")
+        s_cell(ws0, row, 4, se, fill=red_fill,   align="center")
+        row += 1
+
+    # Top flags
+    row += 1
+    s_cell(ws0, row, 1, "Top Flags", font=section_font)
+    row += 1
+    for col, h in enumerate(["Flag", "Count"], 1):
+        s_cell(ws0, row, col, h, font=Font(bold=True, color="FFFFFF"), fill=PatternFill("solid", fgColor="37474F"), align="center")
+    row += 1
+    from collections import Counter
+    flag_counter = Counter()
+    for r in aria_list:
+        for f in (r.get("field_to_review") or "").split("|"):
+            f = f.strip()
+            if f and f != "No_Action_Required":
+                flag_counter[f] += 1
+    for r in mtx_list:
+        for f in (r.get("mtx_field_to_review") or "").split("|"):
+            f = f.strip()
+            if f and f != "No_Action_Required":
+                flag_counter[f] += 1
+    for r in sf_list:
+        for f in (r.get("sf_field_to_review") or "").split("|"):
+            f = f.strip()
+            if f and f != "No_Action_Required":
+                flag_counter[f] += 1
+    if flag_counter:
+        for flag, count in flag_counter.most_common(15):
+            s_cell(ws0, row, 1, flag)
+            s_cell(ws0, row, 2, count, align="center")
+            row += 1
+    else:
+        s_cell(ws0, row, 1, "No flags — all clean ✅", fill=green_fill)
+
+    ws0.column_dimensions["A"].width = 30
+    ws0.column_dimensions["B"].width = 45
+    ws0.column_dimensions["C"].width = 20
+    ws0.column_dimensions["D"].width = 15
+
     # ── Sheet 1: Aria
-    ws1 = wb.active
-    ws1.title = "Aria Validation"
+    ws1 = wb.create_sheet("Aria Validation")
     aria_headers = [
         "MSISDN", "Order BAN-CAN", "Aria BAN-CAN", "BAN Match",
         "Account Status", "Master Plan Status",
@@ -1032,14 +1167,82 @@ def download_run(run_id: int, request: Request):
     color_rows(ws3, [dict(x) for x in sf_results], "sf_validation", sf_headers)
     autofit(ws3)
 
+    # ── Sheet 5: Combined View
+    ws5 = wb.create_sheet("Combined View")
+    combined_headers = [
+        "MSISDN", "Order BANCAN", "Aria BANCAN",
+        "Acct Status", "MPI Status", "Plan Name", "Plan Status",
+        "Device Status", "Inst Status", "NSO Exist",
+        "MTX BANCAN", "MTX Sub Status", "MTX Plan Status", "MTX Device Status",
+        "SF BANCAN", "SF Provision", "SF Disc Reason",
+        "Overall", "Field to Review"
+    ]
+    style_headers(ws5, combined_headers)
+    aria_map = {r.get("msisdn"): r for r in aria_list}
+    mtx_map  = {r.get("msisdn"): r for r in mtx_list}
+    sf_map   = {r.get("msisdn"): r for r in sf_list}
+    all_msisdns = sorted(set(list(aria_map) + list(mtx_map) + list(sf_map)))
+    for row_idx, msisdn in enumerate(all_msisdns, 2):
+        a = aria_map.get(msisdn, {})
+        m = mtx_map.get(msisdn, {})
+        s = sf_map.get(msisdn, {})
+        order_bancan = (a.get("order_ban") or "").strip()
+        aria_bancan  = (a.get("ban_can")   or "").strip()
+        mtx_bancan   = (m.get("mtx_ban_can") or "").strip()
+        sf_bancan    = (s.get("sf_ban_can")  or "").strip()
+        ref = order_bancan if order_bancan else aria_bancan
+        bancan_mismatch = (mtx_bancan and mtx_bancan != ref) or (sf_bancan and sf_bancan != ref)
+        if bancan_mismatch:
+            ftr = "BANCAN Mismatch"
+        else:
+            flags = []
+            for src in (a.get("field_to_review"), m.get("mtx_field_to_review"), s.get("sf_field_to_review")):
+                for f in (src or "").split("|"):
+                    f = f.strip()
+                    if f and f != "No_Action_Required" and f not in flags:
+                        flags.append(f)
+            ftr = " | ".join(flags) if flags else "No_Action_Required"
+        validations = [a.get("validation") or "", m.get("mtx_validation") or "", s.get("sf_validation") or ""]
+        overall = "❌" if any("❌" in v for v in validations) else "⚠️" if any("⚠️" in v for v in validations) else "✅"
+        vals = [
+            msisdn, order_bancan, aria_bancan,
+            a.get("account_status"), a.get("master_plan_status"), a.get("plan_name"), a.get("plan_status"),
+            a.get("child_plan1_status"), a.get("inst_status"), a.get("nso_exist"),
+            mtx_bancan, m.get("mtx_subscription_status"), m.get("mtx_plan_status"), m.get("mtx_device_status"),
+            sf_bancan, s.get("sf_provisioning"), s.get("sf_disc_reason"),
+            overall, ftr
+        ]
+        for col, val in enumerate(vals, 1):
+            ws5.cell(row=row_idx, column=col, value=val)
+        row_fill = (PatternFill("solid", fgColor="FFEBEE") if overall == "❌"
+                    else PatternFill("solid", fgColor="FFF8E1") if overall == "⚠️"
+                    else PatternFill("solid", fgColor="E8F5E9"))
+        for col in range(1, len(combined_headers) + 1):
+            ws5.cell(row=row_idx, column=col).fill = row_fill
+    autofit(ws5)
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
 
-    run_d = dict(run)
     tf = run_d.get('time_from', '0000').replace(':', '')
     tt = run_d.get('time_to',   '2359').replace(':', '')
     filename = f"DiscoValidator_{run_d['date_from']}_{tf}_to_{run_d['date_to']}_{tt}.xlsx"
+    return buf, filename
+
+
+@app.get("/api/runs/{run_id}/download")
+def download_run(run_id: int, request: Request):
+    require_session(request)
+    conn = get_connection()
+    run = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    aria_results = conn.execute("SELECT * FROM results          WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
+    mtx_results  = conn.execute("SELECT * FROM matrixx_results  WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
+    sf_results   = conn.execute("SELECT * FROM sf_asset_results WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
+    conn.close()
+    buf, filename = _build_excel_workbook(run, aria_results, mtx_results, sf_results)
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1194,6 +1397,267 @@ def get_suggestions(run_id: int, request: Request):
             "clean":      is_clean,
         })
     return {"suggestions": suggestions}
+
+
+@app.get("/api/runs/{run_id}/combined")
+def get_combined(run_id: int, request: Request):
+    require_session(request)
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT
+            r.msisdn,
+            r.order_ban,
+            r.ban_can          AS aria_bancan,
+            r.account_status,
+            r.master_plan_status,
+            r.plan_name,
+            r.plan_status,
+            r.child_plan1_status   AS device_status,
+            r.inst_status,
+            r.nso_exist,
+            r.field_to_review,
+            r.validation           AS aria_validation,
+            m.mtx_ban_can,
+            m.mtx_subscription_status,
+            m.mtx_plan_status,
+            m.mtx_device_status,
+            m.mtx_field_to_review,
+            m.mtx_validation,
+            s.sf_ban_can,
+            s.sf_provisioning,
+            s.sf_disc_reason,
+            s.sf_field_to_review,
+            s.sf_validation
+        FROM results r
+        LEFT JOIN matrixx_results m ON m.run_id = r.run_id AND m.msisdn = r.msisdn
+        LEFT JOIN sf_asset_results s ON s.run_id = r.run_id AND s.msisdn = r.msisdn
+        WHERE r.run_id = ?
+        ORDER BY r.msisdn
+    """, (run_id,)).fetchall()
+    conn.close()
+
+    combined = []
+    for row in rows:
+        r = dict(row)
+        order_bancan  = r.get("order_ban") or ""
+        aria_bancan   = r.get("aria_bancan") or ""
+        mtx_bancan    = r.get("mtx_ban_can") or ""
+        sf_bancan     = r.get("sf_ban_can") or ""
+
+        # Use order_bancan as reference if available (SF run), else aria_bancan (manual run)
+        ref_bancan = order_bancan if order_bancan else aria_bancan
+
+        bancan_mismatch = (
+            (mtx_bancan and mtx_bancan != ref_bancan) or
+            (sf_bancan  and sf_bancan  != ref_bancan)
+        )
+
+        if bancan_mismatch:
+            field_to_review = "BANCAN Mismatch"
+        else:
+            flags = []
+            for src in (r.get("field_to_review"), r.get("mtx_field_to_review"), r.get("sf_field_to_review")):
+                if src:
+                    for f in src.split("|"):
+                        f = f.strip()
+                        if f and f != "No_Action_Required" and f not in flags:
+                            flags.append(f)
+            field_to_review = " | ".join(flags) if flags else "No_Action_Required"
+
+        validations = [
+            r.get("aria_validation") or "",
+            r.get("mtx_validation") or "",
+            r.get("sf_validation") or "",
+        ]
+        if any("❌" in v for v in validations):
+            overall = "❌"
+        elif any("⚠️" in v for v in validations):
+            overall = "⚠️"
+        else:
+            overall = "✅"
+
+        combined.append({
+            "msisdn":              r.get("msisdn"),
+            "order_bancan":        order_bancan,
+            "aria_bancan":         aria_bancan,
+            "account_status":      r.get("account_status"),
+            "master_plan_status":  r.get("master_plan_status"),
+            "plan_name":           r.get("plan_name"),
+            "plan_status":         r.get("plan_status"),
+            "device_status":       r.get("device_status"),
+            "inst_status":         r.get("inst_status"),
+            "nso_exist":           r.get("nso_exist"),
+            "mtx_ban_can":         mtx_bancan,
+            "mtx_subscription_status": r.get("mtx_subscription_status"),
+            "mtx_plan_status":     r.get("mtx_plan_status"),
+            "mtx_device_status":   r.get("mtx_device_status"),
+            "sf_ban_can":          sf_bancan,
+            "sf_provisioning":     r.get("sf_provisioning"),
+            "sf_disc_reason":      r.get("sf_disc_reason"),
+            "overall":             overall,
+            "field_to_review":     field_to_review,
+        })
+
+    return {"combined": combined}
+
+
+def _get_scheduler_config() -> dict:
+    conn = get_connection()
+    rows = conn.execute("SELECT key, value FROM scheduler_config").fetchall()
+    conn.close()
+    return {r["key"]: r["value"] for r in rows}
+
+
+def _apply_scheduler_config(cfg: dict):
+    """Reschedule (or remove) the daily_report job based on current config."""
+    enabled     = cfg.get("enabled", "true") == "true"
+    hour_ast    = int(cfg.get("trigger_hour", "8"))
+    minute      = int(cfg.get("trigger_minute", "0"))
+    hour_utc    = (hour_ast + 4) % 24  # AST = UTC-4
+
+    if _scheduler.get_job("daily_report"):
+        _scheduler.remove_job("daily_report")
+
+    if enabled:
+        _scheduler.add_job(
+            _scheduled_daily_report,
+            CronTrigger(hour=hour_utc, minute=minute, timezone="UTC"),
+            id="daily_report",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
+
+def _check_connectivity() -> list[str]:
+    """Return a list of human-readable issues; empty list means all systems go."""
+    issues = []
+    if not is_authenticated():
+        issues.append("Salesforce is not connected — token missing or expired")
+    try:
+        resp = requests.get(
+            f"{matrixx_validator.MATRIXX_BASE_URL.rstrip('/')}/subscription/AccessNumber+test",
+            timeout=4,
+        )
+        _ = resp.status_code
+    except Exception:
+        issues.append("Matrixx is not reachable — port-forward may be down")
+    return issues
+
+
+def _scheduled_daily_report():
+    """Run disconnect validation for the configured date range and email the report."""
+    try:
+        cfg = _get_scheduler_config()
+        if cfg.get("enabled", "true") != "true":
+            print("[scheduler] Disabled — skipping.")
+            return
+
+        now_ast       = datetime.now(timezone.utc) - timedelta(hours=4)
+        yesterday_ast = now_ast - timedelta(days=1)
+
+        report_range = cfg.get("report_range", "yesterday")
+        if report_range == "last2days":
+            date_from = (now_ast - timedelta(days=2)).strftime("%Y-%m-%d")
+        elif report_range == "last7days":
+            date_from = (now_ast - timedelta(days=7)).strftime("%Y-%m-%d")
+        else:
+            date_from = yesterday_ast.strftime("%Y-%m-%d")
+        date_to   = yesterday_ast.strftime("%Y-%m-%d")
+        date_label = f"{date_from} to {date_to} (AST)"
+
+        # Check connectivity before starting validation
+        issues = _check_connectivity()
+        if issues:
+            print(f"[scheduler] Connectivity issues: {issues} — sending alert email.")
+            alert_html = build_connectivity_alert_html(date_label, issues)
+            send_alert(
+                f"ACTION REQUIRED — {date_label}",
+                alert_html,
+                smtp_to=cfg.get("smtp_to", ""),
+                sender_name=cfg.get("smtp_sender_name", ""),
+                subject_prefix=cfg.get("subject_prefix", ""),
+            )
+            return
+
+        conn = get_connection()
+        cur = conn.execute(
+            "INSERT INTO runs (triggered_at, date_from, time_from, date_to, time_to, status) VALUES (?,?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(), date_from, "00:00", date_to, "23:59", "running")
+        )
+        run_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        do_run(run_id, date_from, "00:00", date_to, "23:59")
+
+        excel_bytes, filename = _build_excel_bytes(run_id)
+
+        conn2 = get_connection()
+        aria_list = [dict(r) for r in conn2.execute(
+            "SELECT * FROM results WHERE run_id=?", (run_id,)).fetchall()]
+        mtx_list  = [dict(r) for r in conn2.execute(
+            "SELECT * FROM matrixx_results WHERE run_id=?", (run_id,)).fetchall()]
+        sf_list   = [dict(r) for r in conn2.execute(
+            "SELECT * FROM sf_asset_results WHERE run_id=?", (run_id,)).fetchall()]
+        conn2.close()
+
+        html_body = build_html_body(date_label, aria_list, mtx_list, sf_list)
+        send_report(
+            date_label, html_body, excel_bytes, filename,
+            smtp_to=cfg.get("smtp_to", ""),
+            sender_name=cfg.get("smtp_sender_name", ""),
+            subject_prefix=cfg.get("subject_prefix", ""),
+        )
+        print(f"[scheduler] Daily report sent for {date_label}")
+    except Exception as exc:
+        print(f"[scheduler] Daily report FAILED: {exc}")
+
+
+# Start scheduler and apply persisted config
+_scheduler.start()
+_apply_scheduler_config(_get_scheduler_config())
+
+
+@app.get("/api/admin/scheduler-config")
+def api_get_scheduler_config(request: Request):
+    require_session(request)
+    cfg = _get_scheduler_config()
+    job = _scheduler.get_job("daily_report")
+    next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
+    return {
+        **cfg,
+        "next_run_utc": next_run,
+        "smtp_host":    os.getenv("SMTP_HOST", ""),
+        "smtp_user":    os.getenv("SMTP_USER", ""),
+    }
+
+
+@app.post("/api/admin/scheduler-config")
+def api_update_scheduler_config(body: SchedulerConfigRequest, request: Request):
+    require_session(request)
+    updates = {
+        "enabled":          "true" if body.enabled else "false",
+        "trigger_hour":     str(max(0, min(23, body.trigger_hour))),
+        "trigger_minute":   str(max(0, min(59, body.trigger_minute))),
+        "report_range":     body.report_range,
+        "smtp_to":          body.smtp_to,
+        "smtp_sender_name": body.smtp_sender_name,
+        "subject_prefix":   body.subject_prefix,
+    }
+    conn = get_connection()
+    for k, v in updates.items():
+        conn.execute("INSERT OR REPLACE INTO scheduler_config (key, value) VALUES (?,?)", (k, v))
+    conn.commit()
+    conn.close()
+    _apply_scheduler_config(updates)
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/report/run-now")
+def api_report_run_now(request: Request):
+    require_session(request)
+    threading.Thread(target=_scheduled_daily_report, daemon=True).start()
+    return {"status": "triggered"}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
