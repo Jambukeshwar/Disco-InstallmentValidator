@@ -62,13 +62,14 @@ def parse_sf_records(raw_records: list[dict], segment: str) -> list[dict]:
     for r in raw_records:
         inst_id_field = "PRB2C_Installment_ID__c" if segment == "B2C" else "PRB2B_InstallmentPlanID__c"
         out.append({
-            "segment":         segment,
-            "order_id":        r.get("OrderId") or r.get("Id"),
-            "oli_id":          r.get("PR_Original_OLI_ID__c"),
-            "sf_bancan":       _nested(r, "vlocity_cmt__BillingAccountId__r", "PR_Mobile_Billing_Number__c"),
-            "msisdn":          _nested(r, "vlocity_cmt__ServiceAccountId__r", "MSISDN__c"),
-            "product_name":    _nested(r, "Product2", "Name"),
-            "contract_term":   r.get("Contract_Term__c"),
+            "segment":           segment,
+            "order_id":          r.get("OrderId") or r.get("Id"),
+            "oli_id":            r.get("PR_Original_OLI_ID__c"),
+            "sf_bancan":         _nested(r, "vlocity_cmt__BillingAccountId__r", "PR_Mobile_Billing_Number__c"),
+            "msisdn":            _nested(r, "vlocity_cmt__ServiceAccountId__r", "MSISDN__c"),
+            "product_name":      _nested(r, "Product2", "Name"),
+            "order_reason":      _nested(r, "Order", "vlocity_cmt__Reason__c"),
+            "contract_term":     r.get("Contract_Term__c"),
             "sf_installment_id": str(r.get(inst_id_field) or "").strip(),
         })
     return out
@@ -135,19 +136,22 @@ def process_single(record: dict) -> dict:
     if not oli_id:
         return {**record, "aria_oli": None, "aria_bancan": None,
                 "aria_installment_id": None, "aria_plan_name": None,
-                "validation": "❌", "match_status": "No OLI ID", "error": "OLI ID missing in SF"}
+                "validation": "❌", "match_status": "No Device Found in Aria", "error": "OLI ID missing in SF"}
 
     aria = check_aria(oli_id)
 
     if not aria["aria_found"]:
         validation   = "❌"
-        match_status = "Not Found"
-    elif aria["aria_installment_id"] and sf_installment_id and aria["aria_installment_id"] == sf_installment_id:
-        validation   = "✅"
-        match_status = "Clean"
+        match_status = "No Device Found in Aria"
     else:
-        validation   = "⚠️"
-        match_status = "Exist but different INST ID"
+        bancan_match = (aria["aria_bancan"] or "") == (record.get("sf_bancan") or "")
+        inst_match   = (aria["aria_installment_id"] or "") == (sf_installment_id or "")
+        if bancan_match and inst_match:
+            validation   = "✅"
+            match_status = "Clean"
+        else:
+            validation   = "⚠️"
+            match_status = "Device Exist with wrong Inst ID/BANCAN"
 
     return {
         **record,

@@ -210,6 +210,7 @@ def init_db():
             sf_bancan            TEXT,
             msisdn               TEXT,
             product_name         TEXT,
+            order_reason         TEXT,
             contract_term        TEXT,
             sf_installment_id    TEXT,
             aria_bancan          TEXT,
@@ -222,6 +223,10 @@ def init_db():
             FOREIGN KEY (run_id) REFERENCES installment_runs(id)
         )
     """)
+    # Migrate installment_results — add order_reason if missing
+    existing_inst_res = {row[1] for row in c.execute("PRAGMA table_info(installment_results)")}
+    if "order_reason" not in existing_inst_res:
+        c.execute("ALTER TABLE installment_results ADD COLUMN order_reason TEXT")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS scheduler_config (
@@ -231,13 +236,18 @@ def init_db():
     """)
     # Seed defaults (INSERT OR IGNORE = don't overwrite user-set values)
     defaults = [
-        ("enabled",          "true"),
-        ("trigger_hour",     "8"),
-        ("trigger_minute",   "0"),
-        ("report_range",     "yesterday"),
-        ("smtp_to",          os.getenv("SMTP_TO", "")),
-        ("smtp_sender_name", os.getenv("SMTP_SENDER_NAME", "ITOps Automation")),
-        ("subject_prefix",   os.getenv("SMTP_SUBJECT_PREFIX", "Disconnect Validation Suite - Report")),
+        ("enabled",              "true"),
+        ("trigger_hour",         "8"),
+        ("trigger_minute",       "0"),
+        ("report_range",         "yesterday"),
+        ("subject_prefix",       os.getenv("SMTP_SUBJECT_PREFIX", "Disconnect Validation Suite - Report")),
+        ("inst_enabled",         "true"),
+        ("inst_trigger_hour",    "9"),
+        ("inst_trigger_minute",  "0"),
+        ("inst_report_range",    "yesterday"),
+        ("inst_subject_prefix",  os.getenv("SMTP_INST_SUBJECT_PREFIX", "Installment Validation Suite - Report")),
+        ("smtp_to",              os.getenv("SMTP_TO", "")),
+        ("smtp_sender_name",     os.getenv("SMTP_SENDER_NAME", "ITOps Automation")),
     ]
     for k, v in defaults:
         c.execute("INSERT OR IGNORE INTO scheduler_config (key, value) VALUES (?,?)", (k, v))

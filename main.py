@@ -63,13 +63,18 @@ class InstallmentRunRequest(BaseModel):
 
 
 class SchedulerConfigRequest(BaseModel):
-    enabled:          bool
-    trigger_hour:     int
-    trigger_minute:   int
-    report_range:     str
-    smtp_to:          str
-    smtp_sender_name: str
-    subject_prefix:   str
+    enabled:              bool
+    trigger_hour:         int
+    trigger_minute:       int
+    report_range:         str
+    subject_prefix:       str
+    inst_enabled:         bool
+    inst_trigger_hour:    int
+    inst_trigger_minute:  int
+    inst_report_range:    str
+    inst_subject_prefix:  str
+    smtp_to:              str
+    smtp_sender_name:     str
 
 
 class RunRequest(BaseModel):
@@ -1520,22 +1525,31 @@ def _get_scheduler_config() -> dict:
 
 
 def _apply_scheduler_config(cfg: dict):
-    """Reschedule (or remove) the daily_report job based on current config."""
-    enabled     = cfg.get("enabled", "true") == "true"
-    hour_ast    = int(cfg.get("trigger_hour", "8"))
-    minute      = int(cfg.get("trigger_minute", "0"))
-    hour_utc    = (hour_ast + 4) % 24  # AST = UTC-4
-
+    """Reschedule (or remove) both daily report jobs based on current config."""
+    # Disconnect Validator job
+    enabled  = cfg.get("enabled", "true") == "true"
+    hour_utc = (int(cfg.get("trigger_hour", "8")) + 4) % 24
+    minute   = int(cfg.get("trigger_minute", "0"))
     if _scheduler.get_job("daily_report"):
         _scheduler.remove_job("daily_report")
-
     if enabled:
         _scheduler.add_job(
             _scheduled_daily_report,
             CronTrigger(hour=hour_utc, minute=minute, timezone="UTC"),
-            id="daily_report",
-            replace_existing=True,
-            misfire_grace_time=3600,
+            id="daily_report", replace_existing=True, misfire_grace_time=3600,
+        )
+
+    # Installment Validator job
+    inst_enabled  = cfg.get("inst_enabled", "true") == "true"
+    inst_hour_utc = (int(cfg.get("inst_trigger_hour", "9")) + 4) % 24
+    inst_minute   = int(cfg.get("inst_trigger_minute", "0"))
+    if _scheduler.get_job("installment_report"):
+        _scheduler.remove_job("installment_report")
+    if inst_enabled:
+        _scheduler.add_job(
+            _scheduled_installment_report,
+            CronTrigger(hour=inst_hour_utc, minute=inst_minute, timezone="UTC"),
+            id="installment_report", replace_existing=True, misfire_grace_time=3600,
         )
 
 
@@ -1624,6 +1638,124 @@ def _scheduled_daily_report():
         print(f"[scheduler] Daily report FAILED: {exc}")
 
 
+def _scheduled_installment_report():
+    """Run B2C + B2B installment validation and email the report."""
+    try:
+        cfg = _get_scheduler_config()
+        if cfg.get("inst_enabled", "true") != "true":
+            print("[scheduler] Installment report disabled — skipping.")
+            return
+
+        now_ast       = datetime.now(timezone.utc) - timedelta(hours=4)
+        yesterday_ast = now_ast - timedelta(days=1)
+        report_range  = cfg.get("inst_report_range", "yesterday")
+        if report_range == "last2days":
+            date_from = (now_ast - timedelta(days=2)).strftime("%Y-%m-%d")
+        elif report_range == "last7days":
+            date_from = (now_ast - timedelta(days=7)).strftime("%Y-%m-%d")
+        else:
+            date_from = yesterday_ast.strftime("%Y-%m-%d")
+        date_to    = yesterday_ast.strftime("%Y-%m-%d")
+        date_label = f"{date_from} to {date_to} (AST)"
+
+        issues = _check_connectivity()
+        if issues:
+            alert_html = build_connectivity_alert_html(date_label, issues)
+            send_alert(f"INSTALLMENT — ACTION REQUIRED — {date_label}", alert_html,
+                       smtp_to=cfg.get("smtp_to",""), sender_name=cfg.get("smtp_sender_name",""),
+                       subject_prefix=cfg.get("inst_subject_prefix",""))
+            return
+
+        all_results = []
+        for seg in ("B2C", "B2B"):
+            conn = get_connection()
+            cur  = conn.execute(
+                "INSERT INTO installment_runs (triggered_at,segment,date_from,date_to,status) VALUES (?,?,?,?,?)",
+                (datetime.now(timezone.utc).isoformat(), seg, date_from, date_to, "running"),
+            )
+            run_id = cur.lastrowid
+            conn.commit(); conn.close()
+            do_installment_run(run_id, seg, date_from, date_to)
+            conn2 = get_connection()
+            rows  = conn2.execute("SELECT * FROM installment_results WHERE run_id=?", (run_id,)).fetchall()
+            conn2.close()
+            all_results.extend([dict(r) for r in rows])
+
+        # Build CSV
+        import csv as csv_mod
+        buf = io.StringIO()
+        writer = csv_mod.writer(buf)
+        writer.writerow(["Segment","Status","SF BAN-CAN","SF Inst ID","SF OLI ID","SF Order ID",
+                         "SF Product Name","Order Reason","Aria BAN-CAN","Aria Inst ID","Aria OLI ID",
+                         "Aria Plan","Validation Status","Error"])
+        for r in all_results:
+            writer.writerow([r.get("segment"),r.get("validation"),r.get("sf_bancan"),
+                             r.get("sf_installment_id"),r.get("oli_id"),r.get("order_id"),
+                             r.get("product_name"),r.get("order_reason"),r.get("aria_bancan"),
+                             r.get("aria_installment_id"),r.get("aria_oli"),r.get("aria_plan_name"),
+                             r.get("match_status"),r.get("error")])
+        csv_bytes = buf.getvalue().encode("utf-8-sig")
+        filename  = f"installment_report_{date_from}_{date_to}.csv"
+
+        clean     = sum(1 for r in all_results if r.get("validation")=="✅")
+        mismatch  = sum(1 for r in all_results if r.get("validation")=="⚠️")
+        not_found = sum(1 for r in all_results if r.get("validation")=="❌")
+        html_body = _build_installment_email_html(date_label, len(all_results), clean, mismatch, not_found)
+
+        send_report(f"Installment — {date_label}", html_body, csv_bytes, filename,
+                    smtp_to=cfg.get("smtp_to",""), sender_name=cfg.get("smtp_sender_name",""),
+                    subject_prefix=cfg.get("inst_subject_prefix",""))
+        print(f"[scheduler] Installment report sent for {date_label}")
+    except Exception as exc:
+        print(f"[scheduler] Installment report FAILED: {exc}")
+
+
+def _build_installment_email_html(date_label, total, clean, mismatch, not_found):
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#0d1117;font-family:Arial,sans-serif;color:#e6edf3">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0d1117;padding:32px 16px">
+    <tr><td align="center">
+      <table width="580" cellpadding="0" cellspacing="0" style="background:#161b22;border-radius:12px;border:1px solid #30363d;overflow:hidden">
+        <tr><td style="background:linear-gradient(135deg,#1e3a5f,#0d2137);padding:28px">
+          <div style="font-size:20px;font-weight:800;color:#fff">📦 Installment Purchase Validator — Daily Report</div>
+          <div style="font-size:13px;color:#90caf9;margin-top:6px">{date_label}</div>
+        </td></tr>
+        <tr><td style="padding:24px">
+          <table width="100%" cellpadding="0" cellspacing="4">
+            <tr>
+              <td style="text-align:center;background:#1c2128;border-radius:8px;padding:18px;border:1px solid #30363d">
+                <div style="font-size:28px;font-weight:800;color:#58a6ff">{total}</div>
+                <div style="font-size:10px;color:#8b949e;margin-top:4px;text-transform:uppercase">Total</div>
+              </td>
+              <td width="8"></td>
+              <td style="text-align:center;background:#1c2128;border-radius:8px;padding:18px;border:1px solid #30363d">
+                <div style="font-size:28px;font-weight:800;color:#4caf50">{clean}</div>
+                <div style="font-size:10px;color:#8b949e;margin-top:4px;text-transform:uppercase">Clean ✅</div>
+              </td>
+              <td width="8"></td>
+              <td style="text-align:center;background:#1c2128;border-radius:8px;padding:18px;border:1px solid #30363d">
+                <div style="font-size:28px;font-weight:800;color:#ffaa00">{mismatch}</div>
+                <div style="font-size:10px;color:#8b949e;margin-top:4px;text-transform:uppercase">Mismatch ⚠️</div>
+              </td>
+              <td width="8"></td>
+              <td style="text-align:center;background:#1c2128;border-radius:8px;padding:18px;border:1px solid #30363d">
+                <div style="font-size:28px;font-weight:800;color:#f44336">{not_found}</div>
+                <div style="font-size:10px;color:#8b949e;margin-top:4px;text-transform:uppercase">Not Found ❌</div>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:0 24px 20px">
+          <div style="border-top:1px solid #30363d;padding-top:14px;font-size:12px;color:#8b949e">
+            📎 Full CSV report attached · Generated by ITOps Automation
+          </div>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+
+
 # Start scheduler and apply persisted config
 _scheduler.start()
 _apply_scheduler_config(_get_scheduler_config())
@@ -1633,13 +1765,16 @@ _apply_scheduler_config(_get_scheduler_config())
 def api_get_scheduler_config(request: Request):
     require_session(request)
     cfg = _get_scheduler_config()
-    job = _scheduler.get_job("daily_report")
-    next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
+    job      = _scheduler.get_job("daily_report")
+    inst_job = _scheduler.get_job("installment_report")
+    next_run      = job.next_run_time.isoformat()      if job      and job.next_run_time      else None
+    inst_next_run = inst_job.next_run_time.isoformat() if inst_job and inst_job.next_run_time else None
     return {
         **cfg,
-        "next_run_utc": next_run,
-        "smtp_host":    os.getenv("SMTP_HOST", ""),
-        "smtp_user":    os.getenv("SMTP_USER", ""),
+        "next_run_utc":      next_run,
+        "inst_next_run_utc": inst_next_run,
+        "smtp_host":         os.getenv("SMTP_HOST", ""),
+        "smtp_user":         os.getenv("SMTP_USER", ""),
     }
 
 
@@ -1647,13 +1782,18 @@ def api_get_scheduler_config(request: Request):
 def api_update_scheduler_config(body: SchedulerConfigRequest, request: Request):
     require_session(request)
     updates = {
-        "enabled":          "true" if body.enabled else "false",
-        "trigger_hour":     str(max(0, min(23, body.trigger_hour))),
-        "trigger_minute":   str(max(0, min(59, body.trigger_minute))),
-        "report_range":     body.report_range,
-        "smtp_to":          body.smtp_to,
-        "smtp_sender_name": body.smtp_sender_name,
-        "subject_prefix":   body.subject_prefix,
+        "enabled":              "true" if body.enabled else "false",
+        "trigger_hour":         str(max(0, min(23, body.trigger_hour))),
+        "trigger_minute":       str(max(0, min(59, body.trigger_minute))),
+        "report_range":         body.report_range,
+        "subject_prefix":       body.subject_prefix,
+        "inst_enabled":         "true" if body.inst_enabled else "false",
+        "inst_trigger_hour":    str(max(0, min(23, body.inst_trigger_hour))),
+        "inst_trigger_minute":  str(max(0, min(59, body.inst_trigger_minute))),
+        "inst_report_range":    body.inst_report_range,
+        "inst_subject_prefix":  body.inst_subject_prefix,
+        "smtp_to":              body.smtp_to,
+        "smtp_sender_name":     body.smtp_sender_name,
     }
     conn = get_connection()
     for k, v in updates.items():
@@ -1668,6 +1808,13 @@ def api_update_scheduler_config(body: SchedulerConfigRequest, request: Request):
 def api_report_run_now(request: Request):
     require_session(request)
     threading.Thread(target=_scheduled_daily_report, daemon=True).start()
+    return {"status": "triggered"}
+
+
+@app.post("/api/admin/installment-report/run-now")
+def api_installment_report_run_now(request: Request):
+    require_session(request)
+    threading.Thread(target=_scheduled_installment_report, daemon=True).start()
     return {"status": "triggered"}
 
 
@@ -1702,14 +1849,14 @@ def do_installment_run(run_id: int, segment: str, date_from: str, date_to: str, 
 
                 conn.execute("""
                     INSERT INTO installment_results
-                    (run_id,segment,order_id,oli_id,sf_bancan,msisdn,product_name,contract_term,
-                     sf_installment_id,aria_bancan,aria_oli,aria_installment_id,aria_plan_name,
-                     validation,match_status,error)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    (run_id,segment,order_id,oli_id,sf_bancan,msisdn,product_name,order_reason,
+                     contract_term,sf_installment_id,aria_bancan,aria_oli,aria_installment_id,
+                     aria_plan_name,validation,match_status,error)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     run_id, res.get("segment"), res.get("order_id"), res.get("oli_id"),
                     res.get("sf_bancan"), res.get("msisdn"), res.get("product_name"),
-                    res.get("contract_term"), res.get("sf_installment_id"),
+                    res.get("order_reason"), res.get("contract_term"), res.get("sf_installment_id"),
                     res.get("aria_bancan"), res.get("aria_oli"), res.get("aria_installment_id"),
                     res.get("aria_plan_name"), res.get("validation"), res.get("match_status"),
                     res.get("error"),
@@ -1783,6 +1930,43 @@ def get_installment_run_results(run_id: int, request: Request):
     ).fetchall()
     conn.close()
     return {"results": [dict(r) for r in rows]}
+
+
+@app.get("/api/installment-validator/run/{run_id}/download/csv")
+def download_installment_csv(run_id: int, request: Request):
+    import csv as csv_mod
+    require_session(request)
+    conn = get_connection()
+    run  = conn.execute("SELECT * FROM installment_runs WHERE id=?", (run_id,)).fetchone()
+    rows = conn.execute(
+        "SELECT * FROM installment_results WHERE run_id=? ORDER BY id", (run_id,)
+    ).fetchall()
+    conn.close()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    buf = io.StringIO()
+    writer = csv_mod.writer(buf)
+    writer.writerow(["Status","SF BAN-CAN","SF Inst ID","SF OLI ID","SF Order ID",
+                     "SF Product Name","Order Reason","Aria BAN-CAN","Aria Inst ID","Aria OLI ID",
+                     "Aria Plan","Validation Status","Error"])
+    for r in rows:
+        r = dict(r)
+        writer.writerow([r.get("validation"), r.get("sf_bancan"), r.get("sf_installment_id"),
+                         r.get("oli_id"), r.get("order_id"), r.get("product_name"),
+                         r.get("order_reason"), r.get("aria_bancan"), r.get("aria_installment_id"),
+                         r.get("aria_oli"), r.get("aria_plan_name"), r.get("match_status"),
+                         r.get("error")])
+
+    run_dict = dict(run)
+    filename = f"installment_{run_dict.get('segment','ALL')}_{run_dict.get('date_from','')}.csv"
+    content  = buf.getvalue().encode("utf-8-sig")
+    from fastapi.responses import Response as FResponse
+    return FResponse(
+        content=content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/installment-validator/run/{run_id}/stop")

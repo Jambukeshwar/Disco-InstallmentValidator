@@ -193,7 +193,10 @@ def send_report(
 
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    part = MIMEBase("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    if filename.endswith(".csv"):
+        part = MIMEBase("text", "csv")
+    else:
+        part = MIMEBase("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     part.set_payload(excel_bytes)
     encoders.encode_base64(part)
     part.add_header("Content-Disposition", f'attachment; filename="{filename}"')

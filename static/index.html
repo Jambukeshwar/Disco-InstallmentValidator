@@ -84,7 +84,7 @@
   @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
   .status-text { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
 
-  /* ── Installment Validator ───────────────────────────────────────── */
+  /* ── Installment Purchase Validator ───────────────────────────────────────── */
   #inst-panel { display:none; flex:1; flex-direction:column; overflow:hidden; min-height:0; }
   #inst-table-wrap { flex:1; overflow:auto; min-height:0; }
   .inst-stats { display:flex; gap:20px; padding:10px 28px; border-bottom:1px solid var(--border); flex-shrink:0; }
@@ -348,7 +348,7 @@
     <div class="mode-tabs" id="main-tabs" style="flex-shrink:0;flex-basis:100%">
       <button class="mode-tab active" id="tab-disconnect"    onclick="setMainTab('disconnect')">⚡ Disconnect Validator</button>
       <button class="mode-tab"        id="tab-order"         onclick="setMainTab('order')">🔎 Order Validator</button>
-      <button class="mode-tab"        id="tab-installment"   onclick="setMainTab('installment')">📦 Installment Validator</button>
+      <button class="mode-tab"        id="tab-installment"   onclick="setMainTab('installment')">📦 Installment Purchase Validator</button>
       <button class="mode-tab"        id="tab-config"        onclick="setMainTab('config')">⚙️ Config</button>
     </div>
 
@@ -418,7 +418,7 @@
       <button onclick="clearOrderFilters()" style="background:transparent;border:1px solid var(--border);color:var(--text-dim);padding:0 12px;height:32px;border-radius:4px;cursor:pointer;font-size:12px">Clear</button>
     </div>
 
-    <!-- ── Installment Validator controls ── -->
+    <!-- ── Installment Purchase Validator controls ── -->
     <div id="inst-wrap" style="display:none;align-items:flex-end;gap:12px;flex-wrap:wrap;flex:1">
       <div class="mode-tabs" style="margin:0">
         <button class="mode-tab active" id="inst-tab-b2c" onclick="setInstSegment('B2C')">B2C</button>
@@ -499,7 +499,7 @@
     </div>
   </div>
 
-  <!-- ── Installment Validator Panel ── -->
+  <!-- ── Installment Purchase Validator Panel ── -->
   <div id="inst-panel" style="display:none;flex-direction:column;flex:1;overflow:hidden;min-height:0">
     <div id="inst-progress" style="display:none;padding:10px 28px;border-bottom:1px solid var(--border);flex-shrink:0">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -515,11 +515,14 @@
       <span class="inst-stat clean"><span class="sv" id="inst-stat-clean">0</span>✅ Clean</span>
       <span class="inst-stat mismatch"><span class="sv" id="inst-stat-mismatch">0</span>⚠️ Mismatch</span>
       <span class="inst-stat notfound"><span class="sv" id="inst-stat-notfound">0</span>❌ Not Found</span>
+      <span style="margin-left:auto">
+        <button id="inst-dl-btn" onclick="downloadInstallmentCSV()" style="display:none;background:transparent;border:1px solid var(--accent);color:var(--accent);padding:4px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">⬇ CSV</button>
+      </span>
     </div>
     <div id="inst-table-wrap" style="flex:1;overflow:auto;min-height:0">
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:300px;color:var(--text-dim)">
         <div style="font-size:36px">📦</div>
-        <div style="font-size:15px;font-weight:600;margin-top:12px">Installment Validator</div>
+        <div style="font-size:15px;font-weight:600;margin-top:12px">Installment Purchase Validator</div>
         <div style="font-size:12px;margin-top:6px">Select B2C or B2B, pick a date range, and click Run Validation.</div>
       </div>
     </div>
@@ -528,9 +531,9 @@
   <!-- ── Config Panel ── -->
   <div id="config-panel" style="display:none;flex:1;overflow-y:auto;padding:28px;flex-direction:column;gap:20px">
 
-    <!-- Schedule Settings -->
+    <!-- Disconnect Validator Schedule -->
     <div class="cfg-card">
-      <div class="cfg-card-title">📅 Schedule Settings</div>
+      <div class="cfg-card-title">📅 Disconnect Validator Schedule</div>
 
       <div class="cfg-row">
         <span class="cfg-label">Enable Daily Report</span>
@@ -567,15 +570,76 @@
         </select>
       </div>
 
-      <div class="cfg-row" style="margin-bottom:0">
+      <div class="cfg-row">
+        <span class="cfg-label">Subject Prefix</span>
+        <input class="cfg-input" type="text" id="cfg-subject-prefix" placeholder="Disconnect Validation Suite - Report">
+      </div>
+
+      <div class="cfg-row" style="margin-bottom:0;align-items:center">
         <span class="cfg-label">Next Scheduled Run</span>
-        <span class="cfg-next-run" id="cfg-next-run">—</span>
+        <div style="display:flex;gap:10px;align-items:center">
+          <span class="cfg-next-run" id="cfg-next-run">—</span>
+          <button class="cfg-btn-outline" style="padding:4px 12px;font-size:12px" onclick="runReportNow()">▶ Run Now</button>
+        </div>
       </div>
     </div>
 
-    <!-- Email Settings -->
+    <!-- Installment Purchase Validator Schedule -->
     <div class="cfg-card">
-      <div class="cfg-card-title">✉️ Email Settings</div>
+      <div class="cfg-card-title">📦 Installment Purchase Validator Schedule</div>
+
+      <div class="cfg-row">
+        <span class="cfg-label">Enable Daily Report</span>
+        <div class="toggle-wrap">
+          <label class="toggle">
+            <input type="checkbox" id="cfg-inst-enabled">
+            <span class="toggle-slider"></span>
+          </label>
+          <span id="cfg-inst-enabled-lbl" style="font-size:12px;color:var(--text-dim)">Disabled</span>
+        </div>
+      </div>
+
+      <div class="cfg-row">
+        <span class="cfg-label">Trigger Time (AST)</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select class="cfg-select" id="cfg-inst-hour"></select>
+          <span style="color:var(--text-dim);font-family:var(--mono);font-size:16px">:</span>
+          <select class="cfg-select" id="cfg-inst-minute">
+            <option value="0">00</option>
+            <option value="15">15</option>
+            <option value="30">30</option>
+            <option value="45">45</option>
+          </select>
+          <span style="font-size:11px;color:var(--text-dim);margin-left:6px">AST (UTC-4)</span>
+        </div>
+      </div>
+
+      <div class="cfg-row">
+        <span class="cfg-label">Report Date Range</span>
+        <select class="cfg-select" id="cfg-inst-range">
+          <option value="yesterday">Yesterday (00:00 – 23:59)</option>
+          <option value="last2days">Last 2 Days</option>
+          <option value="last7days">Last 7 Days</option>
+        </select>
+      </div>
+
+      <div class="cfg-row">
+        <span class="cfg-label">Subject Prefix</span>
+        <input class="cfg-input" type="text" id="cfg-inst-subject-prefix" placeholder="Installment Validation Suite - Report">
+      </div>
+
+      <div class="cfg-row" style="margin-bottom:0;align-items:center">
+        <span class="cfg-label">Next Scheduled Run</span>
+        <div style="display:flex;gap:10px;align-items:center">
+          <span class="cfg-next-run" id="cfg-inst-next-run">—</span>
+          <button class="cfg-btn-outline" style="padding:4px 12px;font-size:12px" onclick="runInstallmentReportNow()">▶ Run Now</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Email Settings (shared) -->
+    <div class="cfg-card">
+      <div class="cfg-card-title">✉️ Email Settings (Shared)</div>
 
       <div class="cfg-row">
         <span class="cfg-label">Recipients</span>
@@ -583,14 +647,9 @@
           placeholder="email1@org.com, email2@org.com&#10;(one per line or comma-separated)"></textarea>
       </div>
 
-      <div class="cfg-row">
+      <div class="cfg-row" style="margin-bottom:0">
         <span class="cfg-label">Sender Name</span>
         <input class="cfg-input" type="text" id="cfg-sender-name" placeholder="ITOps Automation">
-      </div>
-
-      <div class="cfg-row" style="margin-bottom:0">
-        <span class="cfg-label">Subject Prefix</span>
-        <input class="cfg-input" type="text" id="cfg-subject-prefix" placeholder="Disconnect Validation Suite - Report">
       </div>
     </div>
 
@@ -603,7 +662,6 @@
     <!-- Actions -->
     <div class="cfg-actions">
       <button class="cfg-btn" onclick="saveSchedulerConfig()">💾 Save &amp; Apply</button>
-      <button class="cfg-btn-outline" onclick="runReportNow()">▶ Run Now</button>
       <span class="cfg-status" id="cfg-status"></span>
     </div>
 
@@ -1027,7 +1085,7 @@
     catch{st.textContent='❌ Failed to start port-forward.';st.className='conn-modal-status err';}
   }
 
-  // ── Installment Validator ─────────────────────────────────────────────────
+  // ── Installment Purchase Validator ─────────────────────────────────────────────────
   let _instSegment='B2C', _instRunId=null, _instPoller=null;
 
   function initInstDates(){
@@ -1055,6 +1113,7 @@
     document.getElementById('inst-stop-btn').style.display='inline-block';
     document.getElementById('inst-progress').style.display='block';
     document.getElementById('inst-stats').style.display='flex';
+    document.getElementById('inst-dl-btn').style.display='none';
     document.getElementById('inst-progress-label').textContent='Starting...';
     document.getElementById('inst-progress-fill').style.width='0%';
     document.getElementById('inst-table-wrap').innerHTML='<div style="padding:20px;color:var(--text-dim);font-size:13px">Fetching SF records...</div>';
@@ -1107,25 +1166,27 @@
   }
 
   function renderInstallmentTable(rows){
+    const dlBtn=document.getElementById('inst-dl-btn');
     if(!rows.length){
       document.getElementById('inst-table-wrap').innerHTML='<div style="padding:40px;text-align:center;color:var(--text-dim)">No records found.</div>';
+      if(dlBtn)dlBtn.style.display='none';
       return;
     }
+    if(dlBtn)dlBtn.style.display='inline-block';
     const cols=[
-      {k:'validation',     l:'Status'},
-      {k:'msisdn',         l:'MSISDN'},
-      {k:'sf_bancan',      l:'SF BAN-CAN'},
-      {k:'sf_installment_id', l:'SF Inst ID'},
-      {k:'aria_bancan',    l:'Aria BAN-CAN'},
+      {k:'validation',          l:'Status'},
+      {k:'sf_bancan',           l:'SF BAN-CAN'},
+      {k:'sf_installment_id',   l:'SF Inst ID'},
+      {k:'oli_id',              l:'SF OLI ID'},
+      {k:'order_id',            l:'SF Order ID'},
+      {k:'product_name',        l:'SF Product Name'},
+      {k:'order_reason',        l:'Order Reason'},
+      {k:'aria_bancan',         l:'Aria BAN-CAN'},
       {k:'aria_installment_id', l:'Aria Inst ID'},
-      {k:'aria_oli',       l:'Aria OLI ID'},
-      {k:'aria_plan_name', l:'Aria Plan'},
-      {k:'oli_id',         l:'OLI ID (SF)'},
-      {k:'product_name',   l:'Product'},
-      {k:'contract_term',  l:'Contract Term'},
-      {k:'match_status',   l:'Match Status'},
-      {k:'order_id',       l:'Order ID'},
-      {k:'error',          l:'Error'},
+      {k:'aria_oli',            l:'Aria OLI ID'},
+      {k:'aria_plan_name',      l:'Aria Plan'},
+      {k:'match_status',        l:'Validation Status'},
+      {k:'error',               l:'Error'},
     ];
     let th=cols.map(c=>`<th>${c.l}</th>`).join('');
     let tb=rows.map(r=>{
@@ -1138,8 +1199,8 @@
           return `<td style="text-align:center;font-size:16px;color:${col}">${val}</td>`;
         }
         if(c.k==='match_status'){
-          const col=val==='Clean'?'var(--green)':val==='Not Found'?'var(--red)':'var(--amber)';
-          return `<td style="color:${col};font-weight:600;white-space:nowrap">${val}</td>`;
+          const col=val==='Clean'?'var(--green)':val==='No Device Found in Aria'?'var(--red)':'var(--amber)';
+          return `<td style="color:${col};font-weight:600;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis" title="${val}">${val}</td>`;
         }
         return `<td style="white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${String(val).replace(/"/g,'&quot;')}">${val||'—'}</td>`;
       }).join('');
@@ -1154,13 +1215,21 @@
 
   // ── Config page ───────────────────────────────────────────────────────────
   (function(){
-    const sel=document.getElementById('cfg-hour');
-    for(let h=0;h<24;h++){
-      const o=document.createElement('option');
-      o.value=h; o.textContent=String(h).padStart(2,'0')+':00';
-      sel.appendChild(o);
-    }
+    ['cfg-hour','cfg-inst-hour'].forEach(id=>{
+      const sel=document.getElementById(id);
+      for(let h=0;h<24;h++){
+        const o=document.createElement('option');
+        o.value=h; o.textContent=String(h).padStart(2,'0')+':00';
+        sel.appendChild(o);
+      }
+    });
   })();
+
+  function _fmtUtcAsAst(utcStr){
+    if(!utcStr)return null;
+    const ast=new Date(new Date(utcStr).getTime()-4*3600*1000);
+    return ast.toLocaleString('en-US',{timeZone:'UTC',year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})+' AST';
+  }
 
   async function loadSchedulerConfig(){
     try{
@@ -1170,22 +1239,28 @@
       document.getElementById('cfg-hour').value=d.trigger_hour||'8';
       document.getElementById('cfg-minute').value=d.trigger_minute||'0';
       document.getElementById('cfg-range').value=d.report_range||'yesterday';
+      document.getElementById('cfg-next-run').textContent=_fmtUtcAsAst(d.next_run_utc)||'Schedule disabled';
+
+      document.getElementById('cfg-inst-enabled').checked=d.inst_enabled==='true';
+      document.getElementById('cfg-inst-enabled-lbl').textContent=d.inst_enabled==='true'?'Enabled':'Disabled';
+      document.getElementById('cfg-inst-hour').value=d.inst_trigger_hour||'9';
+      document.getElementById('cfg-inst-minute').value=d.inst_trigger_minute||'0';
+      document.getElementById('cfg-inst-range').value=d.inst_report_range||'yesterday';
+      document.getElementById('cfg-inst-subject-prefix').value=d.inst_subject_prefix||'';
+      document.getElementById('cfg-inst-next-run').textContent=_fmtUtcAsAst(d.inst_next_run_utc)||'Schedule disabled';
+
+      document.getElementById('cfg-subject-prefix').value=d.subject_prefix||'';
       document.getElementById('cfg-smtp-to').value=d.smtp_to||'';
       document.getElementById('cfg-sender-name').value=d.smtp_sender_name||'';
-      document.getElementById('cfg-subject-prefix').value=d.subject_prefix||'';
-      if(d.next_run_utc){
-        const utc=new Date(d.next_run_utc);
-        const ast=new Date(utc.getTime()-4*60*60*1000);
-        document.getElementById('cfg-next-run').textContent=ast.toLocaleString('en-US',{timeZone:'UTC',year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})+' AST';
-      } else {
-        document.getElementById('cfg-next-run').textContent='Schedule disabled';
-      }
       // SMTP server info
       document.getElementById('cfg-smtp-info').textContent=
         `Host: ${d.smtp_host||'(set SMTP_HOST in .env)'}  |  Port: 587  |  User: ${d.smtp_user||'(set SMTP_USER in .env)'}  |  From: ${d.smtp_to?'configured':'(set SMTP_FROM in .env)'}`;
     }catch(e){console.error(e);}
     document.getElementById('cfg-enabled').onchange=function(){
       document.getElementById('cfg-enabled-lbl').textContent=this.checked?'Enabled':'Disabled';
+    };
+    document.getElementById('cfg-inst-enabled').onchange=function(){
+      document.getElementById('cfg-inst-enabled-lbl').textContent=this.checked?'Enabled':'Disabled';
     };
   }
 
@@ -1196,9 +1271,14 @@
       trigger_hour:parseInt(document.getElementById('cfg-hour').value),
       trigger_minute:parseInt(document.getElementById('cfg-minute').value),
       report_range:document.getElementById('cfg-range').value,
+      subject_prefix:document.getElementById('cfg-subject-prefix').value.trim(),
+      inst_enabled:document.getElementById('cfg-inst-enabled').checked,
+      inst_trigger_hour:parseInt(document.getElementById('cfg-inst-hour').value),
+      inst_trigger_minute:parseInt(document.getElementById('cfg-inst-minute').value),
+      inst_report_range:document.getElementById('cfg-inst-range').value,
+      inst_subject_prefix:document.getElementById('cfg-inst-subject-prefix').value.trim(),
       smtp_to:document.getElementById('cfg-smtp-to').value.trim(),
       smtp_sender_name:document.getElementById('cfg-sender-name').value.trim(),
-      subject_prefix:document.getElementById('cfg-subject-prefix').value.trim(),
     };
     try{
       const res=await fetch('/api/admin/scheduler-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -1214,13 +1294,29 @@
 
   async function runReportNow(){
     const st=document.getElementById('cfg-status');
-    st.textContent='Triggering report...';st.className='cfg-status';
+    st.textContent='Triggering Disconnect report...';st.className='cfg-status';
     try{
       const res=await fetch('/api/admin/report/run-now',{method:'POST'});
-      if(res.ok){st.textContent='✅ Report is running — check server logs for progress.';st.className='cfg-status ok';}
+      if(res.ok){st.textContent='✅ Disconnect report running — check logs.';st.className='cfg-status ok';}
       else{st.textContent='❌ Trigger failed.';st.className='cfg-status err';}
     }catch(e){st.textContent='❌ '+e.message;st.className='cfg-status err';}
     setTimeout(()=>{st.textContent='';st.className='cfg-status';},6000);
+  }
+
+  async function runInstallmentReportNow(){
+    const st=document.getElementById('cfg-status');
+    st.textContent='Triggering Installment report...';st.className='cfg-status';
+    try{
+      const res=await fetch('/api/admin/installment-report/run-now',{method:'POST'});
+      if(res.ok){st.textContent='✅ Installment report running — check logs.';st.className='cfg-status ok';}
+      else{st.textContent='❌ Trigger failed.';st.className='cfg-status err';}
+    }catch(e){st.textContent='❌ '+e.message;st.className='cfg-status err';}
+    setTimeout(()=>{st.textContent='';st.className='cfg-status';},6000);
+  }
+
+  function downloadInstallmentCSV(){
+    if(!_instRunId)return;
+    window.location.href=`/api/installment-validator/run/${_instRunId}/download/csv`;
   }
 
   let currentMainTab='disconnect';
