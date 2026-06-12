@@ -185,6 +185,45 @@ def init_db():
         c.execute("ALTER TABLE order_runs ADD COLUMN message TEXT")
 
     c.execute("""
+        CREATE TABLE IF NOT EXISTS installment_runs (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            triggered_at TEXT NOT NULL,
+            segment      TEXT NOT NULL,
+            date_from    TEXT NOT NULL,
+            date_to      TEXT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'running',
+            total        INTEGER DEFAULT 0,
+            done         INTEGER DEFAULT 0,
+            clean        INTEGER DEFAULT 0,
+            mismatch     INTEGER DEFAULT 0,
+            not_found    INTEGER DEFAULT 0
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS installment_results (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id               INTEGER NOT NULL,
+            segment              TEXT,
+            order_id             TEXT,
+            oli_id               TEXT,
+            sf_bancan            TEXT,
+            msisdn               TEXT,
+            product_name         TEXT,
+            contract_term        TEXT,
+            sf_installment_id    TEXT,
+            aria_bancan          TEXT,
+            aria_oli             TEXT,
+            aria_installment_id  TEXT,
+            aria_plan_name       TEXT,
+            validation           TEXT,
+            match_status         TEXT,
+            error                TEXT,
+            FOREIGN KEY (run_id) REFERENCES installment_runs(id)
+        )
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS scheduler_config (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL

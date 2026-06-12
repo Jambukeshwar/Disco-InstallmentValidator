@@ -84,6 +84,17 @@
   @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
   .status-text { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
 
+  /* ── Installment Validator ───────────────────────────────────────── */
+  #inst-panel { display:none; flex:1; flex-direction:column; overflow:hidden; min-height:0; }
+  #inst-table-wrap { flex:1; overflow:auto; min-height:0; }
+  .inst-stats { display:flex; gap:20px; padding:10px 28px; border-bottom:1px solid var(--border); flex-shrink:0; }
+  .inst-stat { font-size:13px; }
+  .inst-stat .sv { font-weight:700; margin-right:4px; }
+  .inst-stat.total .sv { color:var(--accent); }
+  .inst-stat.clean .sv { color:var(--green); }
+  .inst-stat.mismatch .sv { color:var(--amber); }
+  .inst-stat.notfound .sv { color:var(--red); }
+
   /* ── Config Page ─────────────────────────────────────────────────── */
   #config-panel { display:none; flex:1; overflow-y:auto; padding:28px; flex-direction:column; gap:20px; }
   .cfg-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:22px 26px; }
@@ -335,9 +346,10 @@
   <div id="topbar">
     <!-- ── Main tabs ── -->
     <div class="mode-tabs" id="main-tabs" style="flex-shrink:0;flex-basis:100%">
-      <button class="mode-tab active" id="tab-disconnect" onclick="setMainTab('disconnect')">⚡ Disconnect Validator</button>
-      <button class="mode-tab"        id="tab-order"      onclick="setMainTab('order')">🔎 Order Validator</button>
-      <button class="mode-tab"        id="tab-config"     onclick="setMainTab('config')">⚙️ Config</button>
+      <button class="mode-tab active" id="tab-disconnect"    onclick="setMainTab('disconnect')">⚡ Disconnect Validator</button>
+      <button class="mode-tab"        id="tab-order"         onclick="setMainTab('order')">🔎 Order Validator</button>
+      <button class="mode-tab"        id="tab-installment"   onclick="setMainTab('installment')">📦 Installment Validator</button>
+      <button class="mode-tab"        id="tab-config"        onclick="setMainTab('config')">⚙️ Config</button>
     </div>
 
     <!-- ── Disconnect Validator controls ── -->
@@ -405,6 +417,30 @@
       <button id="ov-run-btn" onclick="startOrderValidator()"><span>▶</span> Run</button>
       <button onclick="clearOrderFilters()" style="background:transparent;border:1px solid var(--border);color:var(--text-dim);padding:0 12px;height:32px;border-radius:4px;cursor:pointer;font-size:12px">Clear</button>
     </div>
+
+    <!-- ── Installment Validator controls ── -->
+    <div id="inst-wrap" style="display:none;align-items:flex-end;gap:12px;flex-wrap:wrap;flex:1">
+      <div class="mode-tabs" style="margin:0">
+        <button class="mode-tab active" id="inst-tab-b2c" onclick="setInstSegment('B2C')">B2C</button>
+        <button class="mode-tab"        id="inst-tab-b2b" onclick="setInstSegment('B2B')">B2B</button>
+      </div>
+      <div class="field-wrap">
+        <div class="topbar-label">Date From</div>
+        <div class="datetime-pair">
+          <input type="date" id="inst-date-from"/>
+          <input type="time" id="inst-time-from" value="00:00"/>
+        </div>
+      </div>
+      <div class="field-wrap">
+        <div class="topbar-label">Date To</div>
+        <div class="datetime-pair">
+          <input type="date" id="inst-date-to"/>
+          <input type="time" id="inst-time-to" value="23:59"/>
+        </div>
+      </div>
+      <button id="inst-run-btn" onclick="startInstallmentRun()" style="margin-top:18px;background:linear-gradient(135deg,var(--accent2),var(--accent));color:#fff;border:none;padding:9px 22px;border-radius:6px;font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer">▶ Run Validation</button>
+      <button id="inst-stop-btn" onclick="stopInstallmentRun()" style="display:none;margin-top:18px;background:transparent;border:1px solid var(--red);color:var(--red);padding:9px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer">⏹ Stop</button>
+    </div>
   </div>
 
   <div id="progress-wrap">
@@ -459,6 +495,32 @@
         <div style="font-size:36px">🔎</div>
         <div style="font-size:15px;font-weight:600;margin-top:12px">Order Validator</div>
         <div style="font-size:12px;margin-top:6px">Apply filters and click Run to query unbilled installment orders.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Installment Validator Panel ── -->
+  <div id="inst-panel" style="display:none;flex-direction:column;flex:1;overflow:hidden;min-height:0">
+    <div id="inst-progress" style="display:none;padding:10px 28px;border-bottom:1px solid var(--border);flex-shrink:0">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:12px;color:var(--text-dim)" id="inst-progress-label">Running...</span>
+        <span style="font-size:12px;color:var(--accent);font-family:var(--mono)" id="inst-progress-pct">0%</span>
+      </div>
+      <div style="height:4px;background:var(--border);border-radius:2px">
+        <div id="inst-progress-fill" style="height:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:2px;width:0%;transition:width 0.3s"></div>
+      </div>
+    </div>
+    <div class="inst-stats" id="inst-stats" style="display:none">
+      <span class="inst-stat total"><span class="sv" id="inst-stat-total">0</span>Total</span>
+      <span class="inst-stat clean"><span class="sv" id="inst-stat-clean">0</span>✅ Clean</span>
+      <span class="inst-stat mismatch"><span class="sv" id="inst-stat-mismatch">0</span>⚠️ Mismatch</span>
+      <span class="inst-stat notfound"><span class="sv" id="inst-stat-notfound">0</span>❌ Not Found</span>
+    </div>
+    <div id="inst-table-wrap" style="flex:1;overflow:auto;min-height:0">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:300px;color:var(--text-dim)">
+        <div style="font-size:36px">📦</div>
+        <div style="font-size:15px;font-weight:600;margin-top:12px">Installment Validator</div>
+        <div style="font-size:12px;margin-top:6px">Select B2C or B2B, pick a date range, and click Run Validation.</div>
       </div>
     </div>
   </div>
@@ -965,6 +1027,131 @@
     catch{st.textContent='❌ Failed to start port-forward.';st.className='conn-modal-status err';}
   }
 
+  // ── Installment Validator ─────────────────────────────────────────────────
+  let _instSegment='B2C', _instRunId=null, _instPoller=null;
+
+  function initInstDates(){
+    const today=new Date(), yesterday=new Date(today);
+    yesterday.setDate(today.getDate()-1);
+    document.getElementById('inst-date-from').value=yesterday.toISOString().split('T')[0];
+    document.getElementById('inst-time-from').value='00:00';
+    document.getElementById('inst-date-to').value=today.toISOString().split('T')[0];
+    document.getElementById('inst-time-to').value='23:59';
+  }
+
+  function setInstSegment(seg){
+    _instSegment=seg;
+    document.getElementById('inst-tab-b2c').classList.toggle('active',seg==='B2C');
+    document.getElementById('inst-tab-b2b').classList.toggle('active',seg==='B2B');
+  }
+
+  async function startInstallmentRun(){
+    const dateFrom=document.getElementById('inst-date-from').value;
+    const dateTo=document.getElementById('inst-date-to').value;
+    const timeFrom=document.getElementById('inst-time-from').value||'00:00';
+    const timeTo=document.getElementById('inst-time-to').value||'23:59';
+    if(!dateFrom||!dateTo){alert('Please select a date range.');return;}
+    document.getElementById('inst-run-btn').disabled=true;
+    document.getElementById('inst-stop-btn').style.display='inline-block';
+    document.getElementById('inst-progress').style.display='block';
+    document.getElementById('inst-stats').style.display='flex';
+    document.getElementById('inst-progress-label').textContent='Starting...';
+    document.getElementById('inst-progress-fill').style.width='0%';
+    document.getElementById('inst-table-wrap').innerHTML='<div style="padding:20px;color:var(--text-dim);font-size:13px">Fetching SF records...</div>';
+    try{
+      const res=await fetch('/api/installment-validator/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment:_instSegment,date_from:dateFrom,time_from:timeFrom,date_to:dateTo,time_to:timeTo})});
+      const d=await res.json();
+      _instRunId=d.run_id;
+      _instPoller=setInterval(pollInstallmentRun,2000);
+    }catch(e){
+      document.getElementById('inst-run-btn').disabled=false;
+      document.getElementById('inst-stop-btn').style.display='none';
+      alert('Failed to start: '+e.message);
+    }
+  }
+
+  async function stopInstallmentRun(){
+    if(!_instRunId)return;
+    await fetch(`/api/installment-validator/run/${_instRunId}/stop`,{method:'POST'});
+    document.getElementById('inst-stop-btn').style.display='none';
+  }
+
+  async function pollInstallmentRun(){
+    if(!_instRunId)return;
+    try{
+      const d=await(await fetch(`/api/installment-validator/run/${_instRunId}/status`)).json();
+      const total=d.total||0, done=d.done||0;
+      const pct=total>0?Math.round(done/total*100):0;
+      document.getElementById('inst-progress-fill').style.width=pct+'%';
+      document.getElementById('inst-progress-label').textContent=`${done} / ${total} validated`;
+      document.getElementById('inst-progress-pct').textContent=pct+'%';
+      document.getElementById('inst-stat-total').textContent=total;
+      document.getElementById('inst-stat-clean').textContent=d.clean||0;
+      document.getElementById('inst-stat-mismatch').textContent=d.mismatch||0;
+      document.getElementById('inst-stat-notfound').textContent=d.not_found||0;
+      if(['completed','stopped','failed'].includes(d.status)){
+        clearInterval(_instPoller); _instPoller=null;
+        document.getElementById('inst-run-btn').disabled=false;
+        document.getElementById('inst-stop-btn').style.display='none';
+        document.getElementById('inst-progress-label').textContent=d.status==='completed'?'Completed':'Stopped';
+        loadInstallmentResults(_instRunId);
+      }
+    }catch(e){console.error(e);}
+  }
+
+  async function loadInstallmentResults(runId){
+    try{
+      const d=await(await fetch(`/api/installment-validator/run/${runId}/results`)).json();
+      renderInstallmentTable(d.results||[]);
+    }catch(e){console.error(e);}
+  }
+
+  function renderInstallmentTable(rows){
+    if(!rows.length){
+      document.getElementById('inst-table-wrap').innerHTML='<div style="padding:40px;text-align:center;color:var(--text-dim)">No records found.</div>';
+      return;
+    }
+    const cols=[
+      {k:'validation',     l:'Status'},
+      {k:'msisdn',         l:'MSISDN'},
+      {k:'sf_bancan',      l:'SF BAN-CAN'},
+      {k:'sf_installment_id', l:'SF Inst ID'},
+      {k:'aria_bancan',    l:'Aria BAN-CAN'},
+      {k:'aria_installment_id', l:'Aria Inst ID'},
+      {k:'aria_oli',       l:'Aria OLI ID'},
+      {k:'aria_plan_name', l:'Aria Plan'},
+      {k:'oli_id',         l:'OLI ID (SF)'},
+      {k:'product_name',   l:'Product'},
+      {k:'contract_term',  l:'Contract Term'},
+      {k:'match_status',   l:'Match Status'},
+      {k:'order_id',       l:'Order ID'},
+      {k:'error',          l:'Error'},
+    ];
+    let th=cols.map(c=>`<th>${c.l}</th>`).join('');
+    let tb=rows.map(r=>{
+      const v=r.validation||'';
+      const bg=v==='✅'?'rgba(0,230,118,0.05)':v==='⚠️'?'rgba(255,171,0,0.07)':'rgba(255,82,82,0.07)';
+      const tds=cols.map(c=>{
+        let val=r[c.k]??'';
+        if(c.k==='validation'){
+          const col=v==='✅'?'var(--green)':v==='⚠️'?'var(--amber)':'var(--red)';
+          return `<td style="text-align:center;font-size:16px;color:${col}">${val}</td>`;
+        }
+        if(c.k==='match_status'){
+          const col=val==='Clean'?'var(--green)':val==='Not Found'?'var(--red)':'var(--amber)';
+          return `<td style="color:${col};font-weight:600;white-space:nowrap">${val}</td>`;
+        }
+        return `<td style="white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${String(val).replace(/"/g,'&quot;')}">${val||'—'}</td>`;
+      }).join('');
+      return `<tr style="background:${bg}">${tds}</tr>`;
+    }).join('');
+    document.getElementById('inst-table-wrap').innerHTML=`
+      <table class="results-table" style="width:100%;border-collapse:collapse">
+        <thead><tr>${th}</tr></thead>
+        <tbody>${tb}</tbody>
+      </table>`;
+  }
+
   // ── Config page ───────────────────────────────────────────────────────────
   (function(){
     const sel=document.getElementById('cfg-hour');
@@ -1042,18 +1229,23 @@
     currentMainTab=tab;
     document.getElementById('tab-disconnect').classList.toggle('active',tab==='disconnect');
     document.getElementById('tab-order').classList.toggle('active',tab==='order');
+    document.getElementById('tab-installment').classList.toggle('active',tab==='installment');
     document.getElementById('tab-config').classList.toggle('active',tab==='config');
     document.getElementById('disconnect-wrap').style.display=tab==='disconnect'?'flex':'none';
     document.getElementById('order-wrap').style.display=tab==='order'?'flex':'none';
+    document.getElementById('inst-wrap').style.display=tab==='installment'?'flex':'none';
     // Content panels
     document.getElementById('system-tabs').style.display=tab==='disconnect'?'':'none';
     document.getElementById('filter-bar').style.display=tab==='disconnect'?'':'none';
     document.getElementById('stats-bar').style.display=tab==='disconnect'?'':'none';
     document.getElementById('table-wrap').style.display=tab==='disconnect'?'':'none';
-    if(tab==='order'||tab==='config')document.getElementById('progress-wrap').style.display='none';
+    if(tab!=='disconnect')document.getElementById('progress-wrap').style.display='none';
     const nsoPanel=document.getElementById('nso-panel');
     nsoPanel.style.display=tab==='order'?'flex':'none';
     if(tab==='order')nsoPanel.style.flexDirection='column';
+    const instPanel=document.getElementById('inst-panel');
+    instPanel.style.display=tab==='installment'?'flex':'none';
+    if(tab==='installment')instPanel.style.flexDirection='column';
     const cfgPanel=document.getElementById('config-panel');
     cfgPanel.style.display=tab==='config'?'flex':'none';
     if(tab==='config')loadSchedulerConfig();
@@ -1061,8 +1253,9 @@
     document.getElementById('run-list').style.display=tab==='disconnect'?'':'none';
     document.getElementById('nso-run-list').style.display=tab==='order'?'block':'none';
     document.getElementById('sidebar-history-label').textContent=tab==='order'?'Order Run History':'Run History';
-    document.getElementById('clear-history-btn').style.display=tab==='order'||tab==='config'?'none':'';
+    document.getElementById('clear-history-btn').style.display=(tab==='order'||tab==='config'||tab==='installment')?'none':'';
     if(tab==='order')loadOrderHistory();
+    if(tab==='installment'){setInstSegment(_instSegment);initInstDates();}
   }
 
   function setMode(mode){

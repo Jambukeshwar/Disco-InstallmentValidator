@@ -177,6 +177,35 @@ def run_soql(date_from: str, time_from: str, date_to: str, time_to: str) -> list
     return [{k: v for k, v in r.items() if k != "attributes"} for r in records]
 
 
+def run_soql_query(soql: str) -> list[dict]:
+    """Execute any SOQL query and return all records (handles pagination)."""
+    access_token, instance_url = _get_token()
+    headers = {"Authorization": f"Bearer {access_token}"}
+    url     = f"{instance_url}{QUERY_PATH}"
+    params  = {"q": soql}
+    records = []
+
+    while url:
+        resp   = requests.get(url, headers=headers, params=params, timeout=60)
+        params = None
+
+        if resp.status_code == 401:
+            clear_token()
+            access_token, instance_url = _get_token()
+            headers = {"Authorization": f"Bearer {access_token}"}
+            resp = requests.get(url, headers=headers, timeout=60)
+
+        if resp.status_code != 200:
+            raise SalesforceError(f"SOQL failed ({resp.status_code}): {resp.text}")
+
+        body = resp.json()
+        records.extend(body.get("records", []))
+        nxt = body.get("nextRecordsUrl")
+        url = f"{instance_url}{nxt}" if nxt else None
+
+    return [{k: v for k, v in r.items() if k != "attributes"} for r in records]
+
+
 def test_connection() -> dict:
     """Quick connectivity check."""
     token, instance_url = _get_token()

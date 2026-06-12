@@ -23,6 +23,8 @@ import matrixx_validator
 import sf_asset_validator
 from auth import init_auth_db, verify_login, logout as auth_logout, get_session
 from email_report import build_html_body, send_report, build_connectivity_alert_html, send_alert
+import installment_validator as inst_val
+from salesforce import run_soql_query
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -51,6 +53,14 @@ _startup_conn.close()
 
 
 # ── Pydantic models ────────────────────────────────────────────────────────────
+
+class InstallmentRunRequest(BaseModel):
+    segment:   str
+    date_from: str
+    time_from: str = "00:00"
+    date_to:   str
+    time_to:   str = "23:59"
+
 
 class SchedulerConfigRequest(BaseModel):
     enabled:          bool
@@ -1268,6 +1278,7 @@ def matrixx_status():
 
 _portforward_process = None
 _stop_flags: dict[int, bool] = {}
+_inst_stop_flags: dict[int, bool] = {}
 
 
 @app.post("/api/admin/sf-connect")
@@ -1658,6 +1669,131 @@ def api_report_run_now(request: Request):
     require_session(request)
     threading.Thread(target=_scheduled_daily_report, daemon=True).start()
     return {"status": "triggered"}
+
+
+# ── Installment Validator ──────────────────────────────────────────────────────
+
+def do_installment_run(run_id: int, segment: str, date_from: str, date_to: str, time_from: str = "00:00", time_to: str = "23:59"):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    conn = get_connection()
+    try:
+        soql = inst_val.build_b2c_soql(date_from, date_to, time_from, time_to) if segment == "B2C" else inst_val.build_b2b_soql(date_from, date_to, time_from, time_to)
+        raw  = run_soql_query(soql)
+        records = inst_val.parse_sf_records(raw, segment)
+
+        total = len(records)
+        conn.execute("UPDATE installment_runs SET total=? WHERE id=?", (total, run_id))
+        conn.commit()
+
+        done = clean = mismatch = not_found = 0
+
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            futures = {ex.submit(inst_val.process_single, r): r for r in records}
+            for future in as_completed(futures):
+                if _inst_stop_flags.get(run_id):
+                    ex.shutdown(wait=False, cancel_futures=True)
+                    break
+                res   = future.result()
+                done += 1
+                v     = res.get("validation", "")
+                if v == "✅":    clean     += 1
+                elif v == "⚠️":  mismatch  += 1
+                else:             not_found += 1
+
+                conn.execute("""
+                    INSERT INTO installment_results
+                    (run_id,segment,order_id,oli_id,sf_bancan,msisdn,product_name,contract_term,
+                     sf_installment_id,aria_bancan,aria_oli,aria_installment_id,aria_plan_name,
+                     validation,match_status,error)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    run_id, res.get("segment"), res.get("order_id"), res.get("oli_id"),
+                    res.get("sf_bancan"), res.get("msisdn"), res.get("product_name"),
+                    res.get("contract_term"), res.get("sf_installment_id"),
+                    res.get("aria_bancan"), res.get("aria_oli"), res.get("aria_installment_id"),
+                    res.get("aria_plan_name"), res.get("validation"), res.get("match_status"),
+                    res.get("error"),
+                ))
+                conn.execute(
+                    "UPDATE installment_runs SET done=?,clean=?,mismatch=?,not_found=? WHERE id=?",
+                    (done, clean, mismatch, not_found, run_id),
+                )
+                conn.commit()
+
+        final = "stopped" if _inst_stop_flags.get(run_id) else "completed"
+        conn.execute(
+            "UPDATE installment_runs SET status=?,done=?,clean=?,mismatch=?,not_found=? WHERE id=?",
+            (final, done, clean, mismatch, not_found, run_id),
+        )
+        conn.commit()
+    except Exception as exc:
+        conn.execute("UPDATE installment_runs SET status='failed' WHERE id=?", (run_id,))
+        conn.commit()
+        print(f"[installment] run {run_id} FAILED: {exc}")
+    finally:
+        _inst_stop_flags.pop(run_id, None)
+        conn.close()
+
+
+@app.get("/api/installment-validator/runs")
+def get_installment_runs(request: Request):
+    require_session(request)
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM installment_runs ORDER BY id DESC LIMIT 20"
+    ).fetchall()
+    conn.close()
+    return {"runs": [dict(r) for r in rows]}
+
+
+@app.post("/api/installment-validator/run")
+def start_installment_run(req: InstallmentRunRequest, background_tasks: BackgroundTasks, request: Request):
+    require_session(request)
+    if req.segment not in ("B2C", "B2B"):
+        raise HTTPException(status_code=400, detail="segment must be B2C or B2B")
+    conn = get_connection()
+    cur  = conn.execute(
+        "INSERT INTO installment_runs (triggered_at, segment, date_from, date_to, status) VALUES (?,?,?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), req.segment, req.date_from, req.date_to, "running"),
+    )
+    run_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    background_tasks.add_task(do_installment_run, run_id, req.segment, req.date_from, req.date_to, req.time_from, req.time_to)
+    return {"run_id": run_id, "status": "running"}
+
+
+@app.get("/api/installment-validator/run/{run_id}/status")
+def get_installment_run_status(run_id: int, request: Request):
+    require_session(request)
+    conn = get_connection()
+    row  = conn.execute("SELECT * FROM installment_runs WHERE id=?", (run_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return dict(row)
+
+
+@app.get("/api/installment-validator/run/{run_id}/results")
+def get_installment_run_results(run_id: int, request: Request):
+    require_session(request)
+    conn  = get_connection()
+    rows  = conn.execute(
+        "SELECT * FROM installment_results WHERE run_id=? ORDER BY id", (run_id,)
+    ).fetchall()
+    conn.close()
+    return {"results": [dict(r) for r in rows]}
+
+
+@app.post("/api/installment-validator/run/{run_id}/stop")
+def stop_installment_run(run_id: int, request: Request):
+    require_session(request)
+    _inst_stop_flags[run_id] = True
+    conn = get_connection()
+    conn.execute("UPDATE installment_runs SET status='stopping' WHERE id=? AND status='running'", (run_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "stopping"}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
