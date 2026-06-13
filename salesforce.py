@@ -156,7 +156,7 @@ def run_soql(date_from: str, time_from: str, date_to: str, time_to: str) -> list
     records = []
 
     while url:
-        resp   = requests.get(url, headers=headers, params=params, timeout=60)
+        resp   = requests.get(url, headers=headers, params=params, timeout=120)
         params = None
 
         if resp.status_code == 401:
@@ -164,7 +164,7 @@ def run_soql(date_from: str, time_from: str, date_to: str, time_to: str) -> list
             clear_token()
             access_token, instance_url = _get_token()
             headers = {"Authorization": f"Bearer {access_token}"}
-            resp = requests.get(url, headers=headers, timeout=60)
+            resp = requests.get(url, headers=headers, timeout=120)
 
         if resp.status_code != 200:
             raise SalesforceError(f"SOQL failed ({resp.status_code}): {resp.text}")
@@ -186,14 +186,14 @@ def run_soql_query(soql: str) -> list[dict]:
     records = []
 
     while url:
-        resp   = requests.get(url, headers=headers, params=params, timeout=60)
+        resp   = requests.get(url, headers=headers, params=params, timeout=120)
         params = None
 
         if resp.status_code == 401:
             clear_token()
             access_token, instance_url = _get_token()
             headers = {"Authorization": f"Bearer {access_token}"}
-            resp = requests.get(url, headers=headers, timeout=60)
+            resp = requests.get(url, headers=headers, timeout=120)
 
         if resp.status_code != 200:
             raise SalesforceError(f"SOQL failed ({resp.status_code}): {resp.text}")
