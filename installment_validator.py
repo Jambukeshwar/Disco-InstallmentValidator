@@ -190,6 +190,14 @@ def process_changeplan_order(pair: dict):
 
     disc_parts = (disc_aria.get("product_field_value") or "").split("|")
 
+    # If 3rd position (index 2) is empty or < 1, installment is completed — skip
+    try:
+        disc_pos2 = float(disc_parts[2].strip()) if len(disc_parts) > 2 and disc_parts[2].strip() else 0
+    except (ValueError, TypeError):
+        disc_pos2 = 0
+    if disc_pos2 < 1:
+        return None
+
     if not add_oli:
         return {**base, **no_aria,
                 "validation": "❌", "match_status": "Add OLI Missing in SF",
