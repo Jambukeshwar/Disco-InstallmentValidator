@@ -1980,4 +1980,22 @@ def stop_installment_run(run_id: int, request: Request):
     return {"status": "stopping"}
 
 
+@app.delete("/api/installment-validator/run/{run_id}")
+def delete_installment_run(run_id: int, request: Request):
+    require_session(request)
+    conn = get_connection()
+    row = conn.execute("SELECT status FROM installment_runs WHERE id=?", (run_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Run not found")
+    if row["status"] == "running":
+        conn.close()
+        raise HTTPException(status_code=400, detail="Cannot delete a running run — stop it first")
+    conn.execute("DELETE FROM installment_results WHERE run_id=?", (run_id,))
+    conn.execute("DELETE FROM installment_runs WHERE id=?", (run_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted"}
+
+
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

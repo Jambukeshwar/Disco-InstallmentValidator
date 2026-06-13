@@ -332,6 +332,7 @@
   </div>
   <div id="run-list"><div class="no-runs">No runs yet</div></div>
   <div id="nso-run-list" style="display:none;flex:1;overflow-y:auto;padding:0 8px 16px"><div class="no-runs">No NSO runs yet</div></div>
+  <div id="inst-run-list" style="display:none;flex:1;overflow-y:auto;padding:0 8px 16px"><div class="no-runs">No installment runs yet</div></div>
   <div id="logged-in-as"></div>
   <button id="logout-btn" onclick="doLogout()">⏻ Logout</button>
   <div id="copyright">
@@ -1122,6 +1123,7 @@
       const d=await res.json();
       _instRunId=d.run_id;
       _instPoller=setInterval(pollInstallmentRun,2000);
+      loadInstHistory();
     }catch(e){
       document.getElementById('inst-run-btn').disabled=false;
       document.getElementById('inst-stop-btn').style.display='none';
@@ -1154,6 +1156,7 @@
         document.getElementById('inst-stop-btn').style.display='none';
         document.getElementById('inst-progress-label').textContent=d.status==='completed'?'Completed':'Stopped';
         loadInstallmentResults(_instRunId);
+        loadInstHistory();
       }
     }catch(e){console.error(e);}
   }
@@ -1163,6 +1166,69 @@
       const d=await(await fetch(`/api/installment-validator/run/${runId}/results`)).json();
       renderInstallmentTable(d.results||[]);
     }catch(e){console.error(e);}
+  }
+
+  async function loadInstHistory(){
+    try{
+      const d=await(await fetch('/api/installment-validator/runs')).json();
+      renderInstHistory(d.runs||[]);
+    }catch(e){console.error(e);}
+  }
+
+  function renderInstHistory(runs){
+    const el=document.getElementById('inst-run-list');
+    if(!runs||!runs.length){el.innerHTML='<div class="no-runs">No installment runs yet</div>';return;}
+    el.innerHTML=runs.map(r=>{
+      const inProgress=r.status==='running';
+      const icon=r.status==='running'?'🔄':r.status==='completed'?'✅':r.status==='stopped'?'⏹':'❌';
+      const stopBtn=inProgress?`<button onclick="event.stopPropagation();stopInstallmentRun()" title="Stop" style="background:var(--red);color:#fff;border:none;border-radius:3px;padding:2px 6px;cursor:pointer;font-size:10px;margin-left:4px">■</button>`:'';
+      const delBtn=!inProgress?`<button onclick="event.stopPropagation();deleteInstRun(${r.id})" title="Delete" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:13px;padding:2px 4px;margin-left:4px" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text-dim)'">🗑</button>`:'';
+      const clean=r.clean||0, mismatch=r.mismatch||0, notFound=r.not_found||0;
+      return `<div class="run-item ${r.id===_instRunId?'active':''}" onclick="loadInstRun(${r.id})">
+        <div class="run-item-dates" style="display:flex;align-items:center;justify-content:space-between">
+          <span>${icon} ${r.segment||'?'} · ${r.date_from||''}</span>
+          <span>${stopBtn}${delBtn}</span>
+        </div>
+        <div class="run-item-meta"><span class="run-item-time">${formatTime(r.triggered_at)}</span><span class="badge badge-${r.status}">${r.status}</span></div>
+        <div class="run-item-counts" style="font-size:11px;color:var(--text-dim);margin-top:3px">
+          <span style="color:var(--green)">✅${clean}</span>&nbsp;
+          <span style="color:var(--amber)">⚠️${mismatch}</span>&nbsp;
+          <span style="color:var(--red)">❌${notFound}</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  async function loadInstRun(runId){
+    _instRunId=runId;
+    document.getElementById('inst-stats').style.display='flex';
+    document.getElementById('inst-dl-btn').style.display='none';
+    try{
+      const s=await(await fetch(`/api/installment-validator/run/${runId}/status`)).json();
+      document.getElementById('inst-stat-total').textContent=s.total||0;
+      document.getElementById('inst-stat-clean').textContent=s.clean||0;
+      document.getElementById('inst-stat-mismatch').textContent=s.mismatch||0;
+      document.getElementById('inst-stat-notfound').textContent=s.not_found||0;
+      document.getElementById('inst-progress-label').textContent=`${s.segment||''} · ${s.date_from||''} → ${s.date_to||''} · ${s.status}`;
+      document.getElementById('inst-progress').style.display='block';
+    }catch(e){}
+    await loadInstallmentResults(runId);
+    loadInstHistory();
+  }
+
+  async function deleteInstRun(runId){
+    if(!confirm('Delete this run and its results?'))return;
+    try{
+      const res=await fetch(`/api/installment-validator/run/${runId}`,{method:'DELETE'});
+      if(!res.ok){const e=await res.json();alert(e.detail||'Delete failed');return;}
+      if(_instRunId===runId){
+        _instRunId=null;
+        document.getElementById('inst-progress').style.display='none';
+        document.getElementById('inst-stats').style.display='none';
+        document.getElementById('inst-table-wrap').innerHTML='';
+      }
+      loadInstHistory();
+    }catch(e){alert('Delete failed');}
   }
 
   function renderInstallmentTable(rows){
@@ -1348,10 +1414,11 @@
     // Sidebar
     document.getElementById('run-list').style.display=tab==='disconnect'?'':'none';
     document.getElementById('nso-run-list').style.display=tab==='order'?'block':'none';
-    document.getElementById('sidebar-history-label').textContent=tab==='order'?'Order Run History':'Run History';
+    document.getElementById('inst-run-list').style.display=tab==='installment'?'block':'none';
+    document.getElementById('sidebar-history-label').textContent=tab==='order'?'Order Run History':tab==='installment'?'Installment Run History':'Run History';
     document.getElementById('clear-history-btn').style.display=(tab==='order'||tab==='config'||tab==='installment')?'none':'';
     if(tab==='order')loadOrderHistory();
-    if(tab==='installment'){setInstSegment(_instSegment);initInstDates();}
+    if(tab==='installment'){setInstSegment(_instSegment);initInstDates();loadInstHistory();}
   }
 
   function setMode(mode){
