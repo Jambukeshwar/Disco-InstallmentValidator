@@ -2047,12 +2047,13 @@ def do_installment_run(run_id: int, segment: str, date_from: str, date_to: str, 
                 if _inst_stop_flags.get(run_id):
                     ex.shutdown(wait=False, cancel_futures=True)
                     break
-                res   = future.result()
-                done += 1
+                res = future.result()
                 if res is None:
-                    conn.execute("UPDATE installment_runs SET done=? WHERE id=?", (done, run_id))
+                    total -= 1  # skipped order — remove from total so count stays accurate
+                    conn.execute("UPDATE installment_runs SET total=? WHERE id=?", (total, run_id))
                     conn.commit()
                     continue
+                done += 1
                 v = res.get("validation", "")
                 if v == "✅":    clean     += 1
                 elif v == "⚠️":  mismatch  += 1
