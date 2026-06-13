@@ -57,34 +57,34 @@ def _nested(record: dict, *keys):
     return val
 
 
-def build_changeplan_soql(segment: str, date_from: str, date_to: str, time_from: str = "00:00", time_to: str = "23:59") -> str:
-    dt_from    = _sf_dt(date_from, time_from)
-    dt_to      = _sf_dt(date_to,   time_to)
-    inst_field = "PRB2C_Installment_ID__c" if segment == "B2C" else "PRB2B_InstallmentPlanID__c"
+def build_changeplan_soql(date_from: str, date_to: str, time_from: str = "00:00", time_to: str = "23:59") -> str:
+    dt_from = _sf_dt(date_from, time_from)
+    dt_to   = _sf_dt(date_to,   time_to)
     return (
         "SELECT orderid, order.vlocity_cmt__OrderStatus__c, order.vlocity_cmt__Reason__c, "
         "vlocity_cmt__ServiceAccountId__c, order.type, PR_Original_OLI_ID__c, "
         "vlocity_cmt__ServiceAccountId__r.MSISDN__c, "
         "vlocity_cmt__BillingAccountId__r.PR_Mobile_Billing_Number__c, "
-        f"product2.name, Contract_Term__c, {inst_field}, vlocity_cmt__Action__c, "
-        "vlocity_cmt__BillingAccountId__r.Segment__c "
+        "product2.name, Contract_Term__c, PRB2C_Installment_ID__c, PRB2B_InstallmentPlanID__c, "
+        "vlocity_cmt__Action__c, vlocity_cmt__BillingAccountId__r.Segment__c "
         "FROM orderitem "
         f"WHERE CreatedDate >= {dt_from} AND CreatedDate <= {dt_to} "
         "AND Product2.vlocity_cmt__ObjectTypeName__c IN ('Mobile Phone','Tablet','Accessory','Smart Watch') "
         "AND order.vlocity_cmt__OrderStatus__c = 'Activated' "
         "AND Order.vlocity_cmt__Reason__c IN ('Change Plan') "
-        f"AND vlocity_cmt__BillingAccountId__r.Segment__c = '{segment}' "
         "AND order.Type != 'Disconnect'"
     )
 
 
-def parse_changeplan_records(raw_records: list, segment: str) -> list:
-    """Group SF change plan rows by OrderId into disconnect+add pairs."""
+def parse_changeplan_records(raw_records: list) -> list:
+    """Group SF change plan rows by OrderId into disconnect+add pairs.
+    Segment is read from Segment__c on each row; installment ID picked accordingly."""
     from collections import defaultdict
-    inst_field = "PRB2C_Installment_ID__c" if segment == "B2C" else "PRB2B_InstallmentPlanID__c"
     orders = defaultdict(list)
     for r in raw_records:
         order_id = r.get("OrderId") or r.get("Id")
+        segment  = _nested(r, "vlocity_cmt__BillingAccountId__r", "Segment__c") or ""
+        inst_field = "PRB2C_Installment_ID__c" if segment == "B2C" else "PRB2B_InstallmentPlanID__c"
         orders[order_id].append({
             "order_id":          order_id,
             "action":            r.get("vlocity_cmt__Action__c", ""),

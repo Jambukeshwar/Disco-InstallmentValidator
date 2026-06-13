@@ -2024,14 +2024,10 @@ def do_installment_run(run_id: int, segment: str, date_from: str, date_to: str, 
     conn = get_connection()
     try:
         if segment == "ChangePlan":
-            # Fetch B2C + B2B change plan pairs combined
-            b2c_pairs = inst_val.parse_changeplan_records(
-                run_soql_query(inst_val.build_changeplan_soql("B2C", date_from, date_to, time_from, time_to)), "B2C"
+            pairs = inst_val.parse_changeplan_records(
+                run_soql_query(inst_val.build_changeplan_soql(date_from, date_to, time_from, time_to))
             )
-            b2b_pairs = inst_val.parse_changeplan_records(
-                run_soql_query(inst_val.build_changeplan_soql("B2B", date_from, date_to, time_from, time_to)), "B2B"
-            )
-            tasks = [(inst_val.process_changeplan_order, p) for p in b2c_pairs + b2b_pairs]
+            tasks = [(inst_val.process_changeplan_order, p) for p in pairs]
         elif segment == "B2C":
             records = inst_val.parse_sf_records(run_soql_query(inst_val.build_b2c_soql(date_from, date_to, time_from, time_to)), "B2C")
             tasks   = [(inst_val.process_single, r) for r in records]
