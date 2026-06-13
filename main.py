@@ -633,7 +633,7 @@ def generate_suggestion(aria_fields: str, mtx_fields: str) -> str:
 
 # ── Runs ───────────────────────────────────────────────────────────────────────
 
-def trim_old_runs(conn, keep: int = 5):
+def trim_old_runs(conn, keep: int = 8):
     old = conn.execute(
         "SELECT id FROM runs ORDER BY triggered_at DESC LIMIT -1 OFFSET ?", (keep,)
     ).fetchall()
@@ -642,6 +642,17 @@ def trim_old_runs(conn, keep: int = 5):
         conn.execute("DELETE FROM matrixx_results WHERE run_id = ?", (row["id"],))
         conn.execute("DELETE FROM sf_asset_results WHERE run_id = ?", (row["id"],))
         conn.execute("DELETE FROM runs WHERE id = ?", (row["id"],))
+    if old:
+        conn.commit()
+
+
+def trim_old_installment_runs(conn, keep: int = 15):
+    old = conn.execute(
+        "SELECT id FROM installment_runs ORDER BY triggered_at DESC LIMIT -1 OFFSET ?", (keep,)
+    ).fetchall()
+    for row in old:
+        conn.execute("DELETE FROM installment_results WHERE run_id=?", (row["id"],))
+        conn.execute("DELETE FROM installment_runs WHERE id=?", (row["id"],))
     if old:
         conn.commit()
 
@@ -2030,6 +2041,7 @@ def do_installment_run(run_id: int, segment: str, date_from: str, date_to: str, 
             (final, done, clean, mismatch, not_found, run_id),
         )
         conn.commit()
+        trim_old_installment_runs(conn)
     except Exception as exc:
         conn.execute("UPDATE installment_runs SET status='failed' WHERE id=?", (run_id,))
         conn.commit()
