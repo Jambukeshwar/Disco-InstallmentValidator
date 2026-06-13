@@ -198,6 +198,11 @@ def process_changeplan_order(pair: dict):
     if disc_pos2 < 1:
         return None
 
+    # If 10th position (index 9) is not Active — plan already inactive, no issue — skip
+    disc_pos9 = disc_parts[9].strip() if len(disc_parts) > 9 else ""
+    if disc_pos9.lower() != "active":
+        return None
+
     if not add_oli:
         return {**base, **no_aria,
                 "validation": "❌", "match_status": "Add OLI Missing in SF",
