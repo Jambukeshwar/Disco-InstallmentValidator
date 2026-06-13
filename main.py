@@ -1638,6 +1638,86 @@ def _scheduled_daily_report():
         print(f"[scheduler] Daily report FAILED: {exc}")
 
 
+def _update_pending(results: list, run_date: str):
+    """Insert newly unclean records into installment_pending (skip if OLI already tracked)."""
+    conn = get_connection()
+    for r in results:
+        if r.get("validation") in ("❌", "⚠️") and r.get("oli_id"):
+            conn.execute("""
+                INSERT OR IGNORE INTO installment_pending
+                (oli_id, segment, order_id, sf_bancan, sf_installment_id, msisdn,
+                 product_name, order_reason, contract_term,
+                 first_seen_date, last_checked_date, days_pending,
+                 aria_bancan, aria_oli, aria_installment_id, aria_plan_name,
+                 validation, match_status, error)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?)
+            """, (
+                r.get("oli_id"), r.get("segment"), r.get("order_id"),
+                r.get("sf_bancan"), r.get("sf_installment_id"), r.get("msisdn"),
+                r.get("product_name"), r.get("order_reason"), r.get("contract_term"),
+                run_date, run_date,
+                r.get("aria_bancan"), r.get("aria_oli"), r.get("aria_installment_id"),
+                r.get("aria_plan_name"), r.get("validation"), r.get("match_status"),
+                r.get("error"),
+            ))
+    conn.commit()
+    conn.close()
+
+
+def _revalidate_all_pending(today: str) -> tuple:
+    """Re-validate every pending record against Aria. Returns (still_pending, resolved)."""
+    conn = get_connection()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM installment_pending").fetchall()]
+    conn.close()
+
+    still_pending = []
+    resolved     = []
+
+    for r in rows:
+        aria = inst_val.check_aria(r["oli_id"])
+
+        if not aria["aria_found"]:
+            validation   = "❌"
+            match_status = "No Device Found in Aria"
+        else:
+            bancan_match = (aria["aria_bancan"] or "") == (r.get("sf_bancan") or "")
+            inst_match   = (aria["aria_installment_id"] or "") == (r.get("sf_installment_id") or "")
+            if bancan_match and inst_match:
+                validation   = "✅"
+                match_status = "Clean"
+            else:
+                validation   = "⚠️"
+                match_status = "Device Exist with wrong Inst ID/BANCAN"
+
+        if validation == "✅":
+            resolved.append({**r, "resolved_date": today})
+            conn = get_connection()
+            conn.execute("DELETE FROM installment_pending WHERE id=?", (r["id"],))
+            conn.commit()
+            conn.close()
+        else:
+            from datetime import date as _date
+            try:
+                days = (_date.fromisoformat(today) - _date.fromisoformat(r["first_seen_date"])).days + 1
+            except Exception:
+                days = r.get("days_pending", 1)
+            conn = get_connection()
+            conn.execute("""
+                UPDATE installment_pending
+                SET last_checked_date=?, days_pending=?, validation=?, match_status=?,
+                    aria_bancan=?, aria_oli=?, aria_installment_id=?, aria_plan_name=?, error=?
+                WHERE id=?
+            """, (today, days, validation, match_status,
+                  aria["aria_bancan"], aria["aria_oli"], aria["aria_installment_id"],
+                  aria["aria_plan_name"], aria["error"], r["id"]))
+            conn.commit()
+            conn.close()
+            still_pending.append({**r, "days_pending": days, "validation": validation,
+                                   "match_status": match_status})
+
+    return still_pending, resolved
+
+
 def _scheduled_installment_report():
     """Run B2C + B2B installment validation and email the report."""
     try:
@@ -1681,7 +1761,13 @@ def _scheduled_installment_report():
             conn2.close()
             all_results.extend([dict(r) for r in rows])
 
-        # Build CSV
+        # Step 1 — add new unclean records to pending
+        _update_pending(all_results, date_to)
+
+        # Step 2 — re-validate existing pending records
+        still_pending, resolved = _revalidate_all_pending(date_to)
+
+        # Build daily CSV
         import csv as csv_mod
         buf = io.StringIO()
         writer = csv_mod.writer(buf)
@@ -1694,13 +1780,32 @@ def _scheduled_installment_report():
                              r.get("product_name"),r.get("order_reason"),r.get("aria_bancan"),
                              r.get("aria_installment_id"),r.get("aria_oli"),r.get("aria_plan_name"),
                              r.get("match_status"),r.get("error")])
+
+        # Append pending section to CSV
+        if still_pending:
+            writer.writerow([])
+            writer.writerow(["--- OUTSTANDING PENDING RECORDS ---"])
+            writer.writerow(["Segment","Days Pending","First Seen","SF BAN-CAN","SF Inst ID",
+                             "SF OLI ID","SF Order ID","SF Product Name","Order Reason",
+                             "Aria BAN-CAN","Aria Inst ID","Aria OLI ID","Aria Plan",
+                             "Validation Status","Error"])
+            for r in still_pending:
+                writer.writerow([r.get("segment"),r.get("days_pending"),r.get("first_seen_date"),
+                                 r.get("sf_bancan"),r.get("sf_installment_id"),r.get("oli_id"),
+                                 r.get("order_id"),r.get("product_name"),r.get("order_reason"),
+                                 r.get("aria_bancan"),r.get("aria_installment_id"),r.get("aria_oli"),
+                                 r.get("aria_plan_name"),r.get("match_status"),r.get("error")])
+
         csv_bytes = buf.getvalue().encode("utf-8-sig")
         filename  = f"installment_report_{date_from}_{date_to}.csv"
 
         clean     = sum(1 for r in all_results if r.get("validation")=="✅")
         mismatch  = sum(1 for r in all_results if r.get("validation")=="⚠️")
         not_found = sum(1 for r in all_results if r.get("validation")=="❌")
-        html_body = _build_installment_email_html(date_label, len(all_results), clean, mismatch, not_found)
+        html_body = _build_installment_email_html(
+            date_label, len(all_results), clean, mismatch, not_found,
+            still_pending, resolved
+        )
 
         send_report(f"Installment — {date_label}", html_body, csv_bytes, filename,
                     smtp_to=cfg.get("smtp_to",""), sender_name=cfg.get("smtp_sender_name",""),
@@ -1710,17 +1815,67 @@ def _scheduled_installment_report():
         print(f"[scheduler] Installment report FAILED: {exc}")
 
 
-def _build_installment_email_html(date_label, total, clean, mismatch, not_found):
+def _build_installment_email_html(date_label, total, clean, mismatch, not_found,
+                                   still_pending=None, resolved=None):
+    still_pending = still_pending or []
+    resolved      = resolved or []
+
+    pending_section = ""
+    if still_pending:
+        rows_html = "".join(
+            f"""<tr style="border-bottom:1px solid #21262d">
+              <td style="padding:8px 10px;color:#8b949e;font-size:11px">{r.get('segment','')}</td>
+              <td style="padding:8px 10px;font-size:11px;color:#f44336;font-weight:700">{r.get('days_pending',1)}d</td>
+              <td style="padding:8px 10px;font-size:11px">{r.get('first_seen_date','')}</td>
+              <td style="padding:8px 10px;font-size:11px;font-family:monospace">{r.get('oli_id','')}</td>
+              <td style="padding:8px 10px;font-size:11px">{r.get('sf_bancan','')}</td>
+              <td style="padding:8px 10px;font-size:11px;color:{'#ffaa00' if r.get('validation')=='⚠️' else '#f44336'};font-weight:600">{r.get('match_status','')}</td>
+            </tr>"""
+            for r in still_pending
+        )
+        pending_section = f"""
+        <tr><td style="padding:0 24px 24px">
+          <div style="font-size:14px;font-weight:700;color:#f44336;margin-bottom:12px;padding-top:4px">
+            ⚠️ Outstanding Pending Records ({len(still_pending)})
+          </div>
+          <div style="font-size:12px;color:#8b949e;margin-bottom:10px">
+            These records were unclean on a previous run and have not yet been resolved in Aria.
+          </div>
+          <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #30363d;border-radius:6px;overflow:hidden">
+            <thead>
+              <tr style="background:#21262d">
+                <th style="padding:8px 10px;font-size:10px;color:#8b949e;text-align:left;text-transform:uppercase">Seg</th>
+                <th style="padding:8px 10px;font-size:10px;color:#8b949e;text-align:left;text-transform:uppercase">Age</th>
+                <th style="padding:8px 10px;font-size:10px;color:#8b949e;text-align:left;text-transform:uppercase">First Seen</th>
+                <th style="padding:8px 10px;font-size:10px;color:#8b949e;text-align:left;text-transform:uppercase">OLI ID</th>
+                <th style="padding:8px 10px;font-size:10px;color:#8b949e;text-align:left;text-transform:uppercase">SF BAN-CAN</th>
+                <th style="padding:8px 10px;font-size:10px;color:#8b949e;text-align:left;text-transform:uppercase">Status</th>
+              </tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+          </table>
+        </td></tr>"""
+
+    resolved_note = ""
+    if resolved:
+        resolved_note = f"""
+        <tr><td style="padding:0 24px 16px">
+          <div style="background:rgba(76,175,80,0.08);border:1px solid rgba(76,175,80,0.3);border-radius:6px;padding:10px 14px;font-size:12px;color:#4caf50">
+            ✅ {len(resolved)} previously pending record{'s' if len(resolved)!=1 else ''} resolved today
+          </div>
+        </td></tr>"""
+
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#0d1117;font-family:Arial,sans-serif;color:#e6edf3">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#0d1117;padding:32px 16px">
     <tr><td align="center">
-      <table width="580" cellpadding="0" cellspacing="0" style="background:#161b22;border-radius:12px;border:1px solid #30363d;overflow:hidden">
+      <table width="620" cellpadding="0" cellspacing="0" style="background:#161b22;border-radius:12px;border:1px solid #30363d;overflow:hidden">
         <tr><td style="background:linear-gradient(135deg,#1e3a5f,#0d2137);padding:28px">
           <div style="font-size:20px;font-weight:800;color:#fff">📦 Installment Purchase Validator — Daily Report</div>
           <div style="font-size:13px;color:#90caf9;margin-top:6px">{date_label}</div>
         </td></tr>
-        <tr><td style="padding:24px">
+        <tr><td style="padding:24px 24px 16px">
+          <div style="font-size:12px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">Today's New Orders</div>
           <table width="100%" cellpadding="0" cellspacing="4">
             <tr>
               <td style="text-align:center;background:#1c2128;border-radius:8px;padding:18px;border:1px solid #30363d">
@@ -1745,9 +1900,11 @@ def _build_installment_email_html(date_label, total, clean, mismatch, not_found)
             </tr>
           </table>
         </td></tr>
+        {resolved_note}
+        {pending_section}
         <tr><td style="padding:0 24px 20px">
           <div style="border-top:1px solid #30363d;padding-top:14px;font-size:12px;color:#8b949e">
-            📎 Full CSV report attached · Generated by ITOps Automation
+            📎 Full CSV report attached (includes pending records) · Generated by ITOps Automation
           </div>
         </td></tr>
       </table>
@@ -1996,6 +2153,40 @@ def delete_installment_run(run_id: int, request: Request):
     conn.commit()
     conn.close()
     return {"status": "deleted"}
+
+
+# ── Installment Pending Records ────────────────────────────────────────────────
+
+@app.get("/api/installment-validator/pending")
+def get_installment_pending(request: Request):
+    require_session(request)
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM installment_pending ORDER BY days_pending DESC, first_seen_date ASC"
+    ).fetchall()
+    conn.close()
+    return {"pending": [dict(r) for r in rows]}
+
+
+@app.delete("/api/installment-validator/pending/{pending_id}")
+def delete_installment_pending(pending_id: int, request: Request):
+    """Manually mark a pending record as resolved."""
+    require_session(request)
+    conn = get_connection()
+    conn.execute("DELETE FROM installment_pending WHERE id=?", (pending_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted"}
+
+
+@app.post("/api/installment-validator/pending/revalidate")
+def revalidate_pending(request: Request):
+    """Manually trigger re-validation of all pending records."""
+    require_session(request)
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    threading.Thread(target=_revalidate_all_pending, args=(today,), daemon=True).start()
+    return {"status": "triggered"}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

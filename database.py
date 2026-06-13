@@ -229,6 +229,31 @@ def init_db():
         c.execute("ALTER TABLE installment_results ADD COLUMN order_reason TEXT")
 
     c.execute("""
+        CREATE TABLE IF NOT EXISTS installment_pending (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            oli_id               TEXT UNIQUE NOT NULL,
+            segment              TEXT,
+            order_id             TEXT,
+            sf_bancan            TEXT,
+            sf_installment_id    TEXT,
+            msisdn               TEXT,
+            product_name         TEXT,
+            order_reason         TEXT,
+            contract_term        TEXT,
+            first_seen_date      TEXT NOT NULL,
+            last_checked_date    TEXT,
+            days_pending         INTEGER DEFAULT 1,
+            aria_bancan          TEXT,
+            aria_oli             TEXT,
+            aria_installment_id  TEXT,
+            aria_plan_name       TEXT,
+            validation           TEXT,
+            match_status         TEXT,
+            error                TEXT
+        )
+    """)
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS scheduler_config (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL

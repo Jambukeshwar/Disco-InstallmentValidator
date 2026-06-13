@@ -422,8 +422,9 @@
     <!-- ── Installment Purchase Validator controls ── -->
     <div id="inst-wrap" style="display:none;align-items:flex-end;gap:12px;flex-wrap:wrap;flex:1">
       <div class="mode-tabs" style="margin:0">
-        <button class="mode-tab active" id="inst-tab-b2c" onclick="setInstSegment('B2C')">B2C</button>
-        <button class="mode-tab"        id="inst-tab-b2b" onclick="setInstSegment('B2B')">B2B</button>
+        <button class="mode-tab active" id="inst-tab-b2c"  onclick="setInstSegment('B2C')">B2C</button>
+        <button class="mode-tab"        id="inst-tab-b2b"  onclick="setInstSegment('B2B')">B2B</button>
+        <button class="mode-tab"        id="inst-tab-both" onclick="setInstSegment('Both')">Both</button>
       </div>
       <div class="field-wrap">
         <div class="topbar-label">Date From</div>
@@ -502,31 +503,57 @@
 
   <!-- ── Installment Purchase Validator Panel ── -->
   <div id="inst-panel" style="display:none;flex-direction:column;flex:1;overflow:hidden;min-height:0">
-    <div id="inst-progress" style="display:none;padding:10px 28px;border-bottom:1px solid var(--border);flex-shrink:0">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <span style="font-size:12px;color:var(--text-dim)" id="inst-progress-label">Running...</span>
-        <span style="font-size:12px;color:var(--accent);font-family:var(--mono)" id="inst-progress-pct">0%</span>
+
+    <!-- Inner view switcher: Validate / Pending -->
+    <div style="display:flex;gap:0;border-bottom:1px solid var(--border);flex-shrink:0;padding:0 20px">
+      <button id="inst-view-validate" onclick="setInstView('validate')"
+        style="background:none;border:none;border-bottom:2px solid var(--accent);color:var(--text);padding:10px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--sans)">Validate</button>
+      <button id="inst-view-pending" onclick="setInstView('pending')"
+        style="background:none;border:none;border-bottom:2px solid transparent;color:var(--text-dim);padding:10px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--sans)">⏳ Pending <span id="inst-pending-badge" style="display:none;background:var(--red);color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:4px">0</span></button>
+    </div>
+
+    <!-- Validate view -->
+    <div id="inst-view-validate-panel" style="display:flex;flex-direction:column;flex:1;overflow:hidden;min-height:0">
+      <div id="inst-progress" style="display:none;padding:10px 28px;border-bottom:1px solid var(--border);flex-shrink:0">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-size:12px;color:var(--text-dim)" id="inst-progress-label">Running...</span>
+          <span style="font-size:12px;color:var(--accent);font-family:var(--mono)" id="inst-progress-pct">0%</span>
+        </div>
+        <div style="height:4px;background:var(--border);border-radius:2px">
+          <div id="inst-progress-fill" style="height:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:2px;width:0%;transition:width 0.3s"></div>
+        </div>
       </div>
-      <div style="height:4px;background:var(--border);border-radius:2px">
-        <div id="inst-progress-fill" style="height:4px;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:2px;width:0%;transition:width 0.3s"></div>
+      <div class="inst-stats" id="inst-stats" style="display:none">
+        <span class="inst-stat total"><span class="sv" id="inst-stat-total">0</span>Total</span>
+        <span class="inst-stat clean"><span class="sv" id="inst-stat-clean">0</span>✅ Clean</span>
+        <span class="inst-stat mismatch"><span class="sv" id="inst-stat-mismatch">0</span>⚠️ Mismatch</span>
+        <span class="inst-stat notfound"><span class="sv" id="inst-stat-notfound">0</span>❌ Not Found</span>
+        <span style="margin-left:auto">
+          <button id="inst-dl-btn" onclick="downloadInstallmentCSV()" style="display:none;background:transparent;border:1px solid var(--accent);color:var(--accent);padding:4px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">⬇ CSV</button>
+        </span>
+      </div>
+      <div id="inst-table-wrap" style="flex:1;overflow:auto;min-height:0">
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:300px;color:var(--text-dim)">
+          <div style="font-size:36px">📦</div>
+          <div style="font-size:15px;font-weight:600;margin-top:12px">Installment Purchase Validator</div>
+          <div style="font-size:12px;margin-top:6px">Select B2C, B2B, or Both, pick a date range, and click Run Validation.</div>
+        </div>
       </div>
     </div>
-    <div class="inst-stats" id="inst-stats" style="display:none">
-      <span class="inst-stat total"><span class="sv" id="inst-stat-total">0</span>Total</span>
-      <span class="inst-stat clean"><span class="sv" id="inst-stat-clean">0</span>✅ Clean</span>
-      <span class="inst-stat mismatch"><span class="sv" id="inst-stat-mismatch">0</span>⚠️ Mismatch</span>
-      <span class="inst-stat notfound"><span class="sv" id="inst-stat-notfound">0</span>❌ Not Found</span>
-      <span style="margin-left:auto">
-        <button id="inst-dl-btn" onclick="downloadInstallmentCSV()" style="display:none;background:transparent;border:1px solid var(--accent);color:var(--accent);padding:4px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">⬇ CSV</button>
-      </span>
-    </div>
-    <div id="inst-table-wrap" style="flex:1;overflow:auto;min-height:0">
-      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:300px;color:var(--text-dim)">
-        <div style="font-size:36px">📦</div>
-        <div style="font-size:15px;font-weight:600;margin-top:12px">Installment Purchase Validator</div>
-        <div style="font-size:12px;margin-top:6px">Select B2C or B2B, pick a date range, and click Run Validation.</div>
+
+    <!-- Pending view -->
+    <div id="inst-view-pending-panel" style="display:none;flex-direction:column;flex:1;overflow:hidden;min-height:0">
+      <div style="padding:12px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0">
+        <span style="font-size:13px;color:var(--text-dim)">Records not yet resolved in Aria — re-validated daily until clean.</span>
+        <button onclick="revalidatePendingNow()" style="margin-left:auto;background:transparent;border:1px solid var(--accent);color:var(--accent);padding:4px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">🔄 Re-validate Now</button>
+      </div>
+      <div id="inst-pending-wrap" style="flex:1;overflow:auto;min-height:0">
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;color:var(--text-dim)">
+          <div style="font-size:13px">Loading pending records...</div>
+        </div>
       </div>
     </div>
+
   </div>
 
   <!-- ── Config Panel ── -->
@@ -1088,6 +1115,10 @@
 
   // ── Installment Purchase Validator ─────────────────────────────────────────────────
   let _instSegment='B2C', _instRunId=null, _instPoller=null;
+  // Both-mode tracking
+  let _instBothPhase=0; // 1=B2C running, 2=B2B running
+  let _instBothB2CId=null, _instBothB2BId=null;
+  let _instBothB2CDone=false;
 
   function initInstDates(){
     const today=new Date(), yesterday=new Date(today);
@@ -1102,6 +1133,7 @@
     _instSegment=seg;
     document.getElementById('inst-tab-b2c').classList.toggle('active',seg==='B2C');
     document.getElementById('inst-tab-b2b').classList.toggle('active',seg==='B2B');
+    document.getElementById('inst-tab-both').classList.toggle('active',seg==='Both');
   }
 
   async function startInstallmentRun(){
@@ -1115,25 +1147,46 @@
     document.getElementById('inst-progress').style.display='block';
     document.getElementById('inst-stats').style.display='flex';
     document.getElementById('inst-dl-btn').style.display='none';
-    document.getElementById('inst-progress-label').textContent='Starting...';
     document.getElementById('inst-progress-fill').style.width='0%';
     document.getElementById('inst-table-wrap').innerHTML='<div style="padding:20px;color:var(--text-dim);font-size:13px">Fetching SF records...</div>';
-    try{
-      const res=await fetch('/api/installment-validator/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment:_instSegment,date_from:dateFrom,time_from:timeFrom,date_to:dateTo,time_to:timeTo})});
-      const d=await res.json();
-      _instRunId=d.run_id;
-      _instPoller=setInterval(pollInstallmentRun,2000);
-      loadInstHistory();
-    }catch(e){
-      document.getElementById('inst-run-btn').disabled=false;
-      document.getElementById('inst-stop-btn').style.display='none';
-      alert('Failed to start: '+e.message);
+
+    if(_instSegment==='Both'){
+      _instBothPhase=1; _instBothB2CId=null; _instBothB2BId=null; _instBothB2CDone=false;
+      document.getElementById('inst-progress-label').textContent='Starting B2C...';
+      try{
+        const res=await fetch('/api/installment-validator/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment:'B2C',date_from:dateFrom,time_from:timeFrom,date_to:dateTo,time_to:timeTo})});
+        const d=await res.json();
+        _instBothB2CId=d.run_id; _instRunId=d.run_id;
+        _instPoller=setInterval(()=>pollInstallmentRunBoth(dateFrom,dateTo,timeFrom,timeTo),2000);
+        loadInstHistory();
+      }catch(e){_instRunFailed(e);}
+    } else {
+      document.getElementById('inst-progress-label').textContent='Starting...';
+      try{
+        const res=await fetch('/api/installment-validator/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment:_instSegment,date_from:dateFrom,time_from:timeFrom,date_to:dateTo,time_to:timeTo})});
+        const d=await res.json();
+        _instRunId=d.run_id;
+        _instPoller=setInterval(pollInstallmentRun,2000);
+        loadInstHistory();
+      }catch(e){_instRunFailed(e);}
     }
   }
 
+  function _instRunFailed(e){
+    document.getElementById('inst-run-btn').disabled=false;
+    document.getElementById('inst-stop-btn').style.display='none';
+    alert('Failed to start: '+e.message);
+  }
+
   async function stopInstallmentRun(){
-    if(!_instRunId)return;
-    await fetch(`/api/installment-validator/run/${_instRunId}/stop`,{method:'POST'});
+    if(_instBothPhase>0){
+      const id=_instBothPhase===1?_instBothB2CId:_instBothB2BId;
+      if(id)await fetch(`/api/installment-validator/run/${id}/stop`,{method:'POST'});
+      _instBothPhase=0;
+    } else {
+      if(!_instRunId)return;
+      await fetch(`/api/installment-validator/run/${_instRunId}/stop`,{method:'POST'});
+    }
     document.getElementById('inst-stop-btn').style.display='none';
   }
 
@@ -1157,6 +1210,63 @@
         document.getElementById('inst-progress-label').textContent=d.status==='completed'?'Completed':'Stopped';
         loadInstallmentResults(_instRunId);
         loadInstHistory();
+      }
+    }catch(e){console.error(e);}
+  }
+
+  async function pollInstallmentRunBoth(dateFrom,dateTo,timeFrom,timeTo){
+    const currentId=_instBothPhase===1?_instBothB2CId:_instBothB2BId;
+    if(!currentId)return;
+    try{
+      const d=await(await fetch(`/api/installment-validator/run/${currentId}/status`)).json();
+      const total=d.total||0, done=d.done||0;
+      const pct=total>0?Math.round(done/total*100):0;
+      const phaseLabel=_instBothPhase===1?'B2C':'B2B';
+      document.getElementById('inst-progress-fill').style.width=(_instBothPhase===1?pct/2:50+pct/2)+'%';
+      document.getElementById('inst-progress-label').textContent=`${phaseLabel}: ${done} / ${total} validated`;
+      document.getElementById('inst-progress-pct').textContent=(_instBothPhase===1?Math.round(pct/2):50+Math.round(pct/2))+'%';
+
+      if(['completed','stopped','failed'].includes(d.status)){
+        if(_instBothPhase===1){
+          // B2C done — start B2B
+          _instBothPhase=2;
+          document.getElementById('inst-progress-label').textContent='B2C done. Starting B2B...';
+          try{
+            const res=await fetch('/api/installment-validator/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment:'B2B',date_from:dateFrom,time_from:timeFrom,date_to:dateTo,time_to:timeTo})});
+            const r2=await res.json();
+            _instBothB2BId=r2.run_id; _instRunId=r2.run_id;
+            loadInstHistory();
+          }catch(e){
+            clearInterval(_instPoller); _instPoller=null;
+            document.getElementById('inst-run-btn').disabled=false;
+            document.getElementById('inst-stop-btn').style.display='none';
+            alert('B2B start failed: '+e.message);
+          }
+        } else {
+          // B2B done — load combined results
+          clearInterval(_instPoller); _instPoller=null;
+          _instBothPhase=0;
+          document.getElementById('inst-run-btn').disabled=false;
+          document.getElementById('inst-stop-btn').style.display='none';
+          document.getElementById('inst-progress-label').textContent='Completed (B2C + B2B)';
+          document.getElementById('inst-progress-fill').style.width='100%';
+          document.getElementById('inst-progress-pct').textContent='100%';
+          // Fetch and merge both results
+          const [r1,r2]=await Promise.all([
+            fetch(`/api/installment-validator/run/${_instBothB2CId}/results`).then(r=>r.json()),
+            fetch(`/api/installment-validator/run/${_instBothB2BId}/results`).then(r=>r.json()),
+          ]);
+          const combined=[...(r1.results||[]),...(r2.results||[])];
+          const clean=combined.filter(x=>x.validation==='✅').length;
+          const mismatch=combined.filter(x=>x.validation==='⚠️').length;
+          const notFound=combined.filter(x=>x.validation==='❌').length;
+          document.getElementById('inst-stat-total').textContent=combined.length;
+          document.getElementById('inst-stat-clean').textContent=clean;
+          document.getElementById('inst-stat-mismatch').textContent=mismatch;
+          document.getElementById('inst-stat-notfound').textContent=notFound;
+          renderInstallmentTable(combined);
+          loadInstHistory();
+        }
       }
     }catch(e){console.error(e);}
   }
@@ -1381,8 +1491,99 @@
   }
 
   function downloadInstallmentCSV(){
-    if(!_instRunId)return;
-    window.location.href=`/api/installment-validator/run/${_instRunId}/download/csv`;
+    if(_instBothB2CId&&_instBothB2BId){
+      window.location.href=`/api/installment-validator/run/${_instBothB2CId}/download/csv`;
+      setTimeout(()=>window.location.href=`/api/installment-validator/run/${_instBothB2BId}/download/csv`,1000);
+    } else if(_instRunId){
+      window.location.href=`/api/installment-validator/run/${_instRunId}/download/csv`;
+    }
+  }
+
+  // ── Pending view ──────────────────────────────────────────────────────────
+  let _instCurrentView='validate';
+
+  function setInstView(view){
+    _instCurrentView=view;
+    const isVal=view==='validate';
+    document.getElementById('inst-view-validate-panel').style.display=isVal?'flex':'none';
+    document.getElementById('inst-view-pending-panel').style.display=isVal?'none':'flex';
+    document.getElementById('inst-view-validate').style.borderBottomColor=isVal?'var(--accent)':'transparent';
+    document.getElementById('inst-view-validate').style.color=isVal?'var(--text)':'var(--text-dim)';
+    document.getElementById('inst-view-pending').style.borderBottomColor=isVal?'transparent':'var(--accent)';
+    document.getElementById('inst-view-pending').style.color=isVal?'var(--text-dim)':'var(--text)';
+    if(!isVal)loadInstPending();
+  }
+
+  async function loadInstPending(){
+    try{
+      const d=await(await fetch('/api/installment-validator/pending')).json();
+      const pending=d.pending||[];
+      // update badge
+      const badge=document.getElementById('inst-pending-badge');
+      if(pending.length>0){badge.style.display='inline';badge.textContent=pending.length;}
+      else{badge.style.display='none';}
+      renderInstPending(pending);
+    }catch(e){console.error(e);}
+  }
+
+  function renderInstPending(rows){
+    const el=document.getElementById('inst-pending-wrap');
+    if(!rows.length){
+      el.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;color:var(--text-dim)"><div style="font-size:32px">✅</div><div style="margin-top:10px;font-size:13px">No pending records — all clean!</div></div>';
+      return;
+    }
+    const cols=[
+      {k:'days_pending',l:'Days'},
+      {k:'first_seen_date',l:'First Seen'},
+      {k:'segment',l:'Seg'},
+      {k:'sf_bancan',l:'SF BAN-CAN'},
+      {k:'sf_installment_id',l:'SF Inst ID'},
+      {k:'oli_id',l:'SF OLI ID'},
+      {k:'order_id',l:'SF Order ID'},
+      {k:'product_name',l:'SF Product'},
+      {k:'order_reason',l:'Order Reason'},
+      {k:'aria_bancan',l:'Aria BAN-CAN'},
+      {k:'aria_installment_id',l:'Aria Inst ID'},
+      {k:'aria_oli',l:'Aria OLI ID'},
+      {k:'aria_plan_name',l:'Aria Plan'},
+      {k:'match_status',l:'Validation Status'},
+      {k:'error',l:'Error'},
+    ];
+    const th=cols.map(c=>`<th style="padding:8px 10px;font-size:10px;color:var(--text-dim);text-align:left;white-space:nowrap;text-transform:uppercase;background:var(--surface2)">${c.l}</th>`).join('')
+             +'<th style="padding:8px 10px;background:var(--surface2)"></th>';
+    const tb=rows.map(r=>{
+      const age=parseInt(r.days_pending)||1;
+      const ageCol=age>=7?'var(--red)':age>=3?'var(--amber)':'var(--text-dim)';
+      const statusCol=r.validation==='⚠️'?'var(--amber)':'var(--red)';
+      const tds=cols.map(c=>{
+        const val=r[c.k]??'';
+        if(c.k==='days_pending') return `<td style="padding:8px 10px;font-weight:700;color:${ageCol};white-space:nowrap">${val}d</td>`;
+        if(c.k==='match_status') return `<td style="padding:8px 10px;color:${statusCol};font-weight:600;white-space:nowrap">${val}</td>`;
+        return `<td style="padding:8px 10px;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis;font-size:12px" title="${String(val).replace(/"/g,'&quot;')}">${val||'—'}</td>`;
+      }).join('');
+      const del=`<td style="padding:4px 8px"><button onclick="deleteInstPending(${r.id})" title="Mark resolved" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:13px" onmouseover="this.style.color='var(--green)'" onmouseout="this.style.color='var(--text-dim)'">✓</button></td>`;
+      return `<tr style="border-bottom:1px solid var(--border)">${tds}${del}</tr>`;
+    }).join('');
+    el.innerHTML=`<table class="results-table" style="width:100%;border-collapse:collapse">
+      <thead><tr>${th}</tr></thead>
+      <tbody>${tb}</tbody>
+    </table>`;
+  }
+
+  async function deleteInstPending(id){
+    if(!confirm('Mark this record as manually resolved?'))return;
+    await fetch(`/api/installment-validator/pending/${id}`,{method:'DELETE'});
+    loadInstPending();
+  }
+
+  async function revalidatePendingNow(){
+    const btn=event.target;
+    btn.disabled=true;btn.textContent='Revalidating...';
+    try{
+      await fetch('/api/installment-validator/pending/revalidate',{method:'POST'});
+      setTimeout(()=>loadInstPending(),2000);
+      setTimeout(()=>{btn.disabled=false;btn.textContent='🔄 Re-validate Now';},3000);
+    }catch(e){btn.disabled=false;btn.textContent='🔄 Re-validate Now';}
   }
 
   let currentMainTab='disconnect';
@@ -1418,7 +1619,7 @@
     document.getElementById('sidebar-history-label').textContent=tab==='order'?'Order Run History':tab==='installment'?'Installment Run History':'Run History';
     document.getElementById('clear-history-btn').style.display=(tab==='order'||tab==='config'||tab==='installment')?'none':'';
     if(tab==='order')loadOrderHistory();
-    if(tab==='installment'){setInstSegment(_instSegment);initInstDates();loadInstHistory();}
+    if(tab==='installment'){setInstSegment(_instSegment);initInstDates();loadInstHistory();loadInstPending();}
   }
 
   function setMode(mode){
