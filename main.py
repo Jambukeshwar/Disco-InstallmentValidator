@@ -62,6 +62,8 @@ class InstallmentRunRequest(BaseModel):
     time_to:   str = "23:59"
 
 
+
+
 class SchedulerConfigRequest(BaseModel):
     enabled:              bool
     trigger_hour:         int
@@ -655,6 +657,7 @@ def trim_old_installment_runs(conn, keep: int = 15):
         conn.execute("DELETE FROM installment_runs WHERE id=?", (row["id"],))
     if old:
         conn.commit()
+
 
 
 def _insert_result(conn, run_id: int, r: dict):
@@ -1660,8 +1663,8 @@ def _update_pending(results: list, run_date: str):
                  product_name, order_reason, contract_term,
                  first_seen_date, last_checked_date, days_pending,
                  aria_bancan, aria_oli, aria_installment_id, aria_plan_name,
-                 validation, match_status, error)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?)
+                 validation, match_status, error, device_amount, monthly_amount)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)
             """, (
                 r.get("oli_id"), r.get("segment"), r.get("order_id"),
                 r.get("sf_bancan"), r.get("sf_installment_id"), r.get("msisdn"),
@@ -1669,7 +1672,7 @@ def _update_pending(results: list, run_date: str):
                 run_date, run_date,
                 r.get("aria_bancan"), r.get("aria_oli"), r.get("aria_installment_id"),
                 r.get("aria_plan_name"), r.get("validation"), r.get("match_status"),
-                r.get("error"),
+                r.get("error"), r.get("device_amount"), r.get("monthly_amount"),
             ))
     conn.commit()
     conn.close()
@@ -1716,15 +1719,19 @@ def _revalidate_all_pending(today: str) -> tuple:
             conn.execute("""
                 UPDATE installment_pending
                 SET last_checked_date=?, days_pending=?, validation=?, match_status=?,
-                    aria_bancan=?, aria_oli=?, aria_installment_id=?, aria_plan_name=?, error=?
+                    aria_bancan=?, aria_oli=?, aria_installment_id=?, aria_plan_name=?,
+                    error=?, device_amount=?, monthly_amount=?
                 WHERE id=?
             """, (today, days, validation, match_status,
                   aria["aria_bancan"], aria["aria_oli"], aria["aria_installment_id"],
-                  aria["aria_plan_name"], aria["error"], r["id"]))
+                  aria["aria_plan_name"], aria["error"],
+                  aria.get("device_amount"), aria.get("monthly_amount"), r["id"]))
             conn.commit()
             conn.close()
             still_pending.append({**r, "days_pending": days, "validation": validation,
-                                   "match_status": match_status})
+                                   "match_status": match_status,
+                                   "device_amount": aria.get("device_amount"),
+                                   "monthly_amount": aria.get("monthly_amount")})
 
     return still_pending, resolved
 
@@ -1758,7 +1765,7 @@ def _scheduled_installment_report():
             return
 
         all_results = []
-        for seg in ("B2C", "B2B"):
+        for seg in ("B2C", "B2B", "ChangePlan"):
             conn = get_connection()
             cur  = conn.execute(
                 "INSERT INTO installment_runs (triggered_at,segment,date_from,date_to,status) VALUES (?,?,?,?,?)",
@@ -1784,13 +1791,14 @@ def _scheduled_installment_report():
         writer = csv_mod.writer(buf)
         writer.writerow(["Segment","Status","SF BAN-CAN","SF Inst ID","SF OLI ID","SF Order ID",
                          "SF Product Name","Order Reason","Aria BAN-CAN","Aria Inst ID","Aria OLI ID",
-                         "Aria Plan","Validation Status","Error"])
+                         "Aria Plan","Validation Status","Device Amount","Monthly Amount","Error"])
         for r in all_results:
             writer.writerow([r.get("segment"),r.get("validation"),r.get("sf_bancan"),
                              r.get("sf_installment_id"),r.get("oli_id"),r.get("order_id"),
                              r.get("product_name"),r.get("order_reason"),r.get("aria_bancan"),
                              r.get("aria_installment_id"),r.get("aria_oli"),r.get("aria_plan_name"),
-                             r.get("match_status"),r.get("error")])
+                             r.get("match_status"),r.get("device_amount"),r.get("monthly_amount"),
+                             r.get("error")])
 
         # Append pending section to CSV
         if still_pending:
@@ -1799,13 +1807,14 @@ def _scheduled_installment_report():
             writer.writerow(["Segment","Days Pending","First Seen","SF BAN-CAN","SF Inst ID",
                              "SF OLI ID","SF Order ID","SF Product Name","Order Reason",
                              "Aria BAN-CAN","Aria Inst ID","Aria OLI ID","Aria Plan",
-                             "Validation Status","Error"])
+                             "Validation Status","Device Amount","Monthly Amount","Error"])
             for r in still_pending:
                 writer.writerow([r.get("segment"),r.get("days_pending"),r.get("first_seen_date"),
                                  r.get("sf_bancan"),r.get("sf_installment_id"),r.get("oli_id"),
                                  r.get("order_id"),r.get("product_name"),r.get("order_reason"),
                                  r.get("aria_bancan"),r.get("aria_installment_id"),r.get("aria_oli"),
-                                 r.get("aria_plan_name"),r.get("match_status"),r.get("error")])
+                                 r.get("aria_plan_name"),r.get("match_status"),
+                                 r.get("device_amount"),r.get("monthly_amount"),r.get("error")])
 
         csv_bytes = buf.getvalue().encode("utf-8-sig")
         filename  = f"installment_report_{date_from}_{date_to}.csv"
@@ -1813,9 +1822,18 @@ def _scheduled_installment_report():
         clean     = sum(1 for r in all_results if r.get("validation")=="✅")
         mismatch  = sum(1 for r in all_results if r.get("validation")=="⚠️")
         not_found = sum(1 for r in all_results if r.get("validation")=="❌")
+
+        # Revenue leak = sum of device_amount across ALL pending records
+        revenue_leak = 0.0
+        for p in still_pending:
+            try:
+                revenue_leak += float(str(p.get("device_amount") or "0").replace(",",""))
+            except (ValueError, TypeError):
+                pass
+
         html_body = _build_installment_email_html(
             date_label, len(all_results), clean, mismatch, not_found,
-            still_pending, resolved
+            still_pending, resolved, revenue_leak,
         )
 
         send_report(f"Installment — {date_label}", html_body, csv_bytes, filename,
@@ -1827,7 +1845,7 @@ def _scheduled_installment_report():
 
 
 def _build_installment_email_html(date_label, total, clean, mismatch, not_found,
-                                   still_pending=None, resolved=None):
+                                   still_pending=None, resolved=None, revenue_leak=0.0):
     still_pending = still_pending or []
     resolved      = resolved or []
 
@@ -1876,6 +1894,18 @@ def _build_installment_email_html(date_label, total, clean, mismatch, not_found,
           </div>
         </td></tr>"""
 
+    revenue_leak_section = ""
+    if still_pending and revenue_leak > 0:
+        count_label = f"{len(still_pending)} outstanding pending record{'s' if len(still_pending) != 1 else ''}"
+        revenue_leak_section = f"""
+        <tr><td style="padding:0 24px 16px">
+          <div style="background:rgba(244,67,54,0.08);border:1px solid rgba(244,67,54,0.4);border-radius:8px;padding:16px 20px">
+            <div style="font-size:11px;font-weight:700;color:#f44336;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">💰 Potential Revenue Leak</div>
+            <div style="font-size:26px;font-weight:800;color:#f44336;line-height:1">SAR {revenue_leak:,.2f}</div>
+            <div style="font-size:11px;color:#8b949e;margin-top:4px">Sum of device amounts across all {count_label}</div>
+          </div>
+        </td></tr>"""
+
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#0d1117;font-family:Arial,sans-serif;color:#e6edf3">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#0d1117;padding:32px 16px">
@@ -1912,6 +1942,7 @@ def _build_installment_email_html(date_label, total, clean, mismatch, not_found,
           </table>
         </td></tr>
         {resolved_note}
+        {revenue_leak_section}
         {pending_section}
         <tr><td style="padding:0 24px 20px">
           <div style="border-top:1px solid #30363d;padding-top:14px;font-size:12px;color:#8b949e">
@@ -1992,25 +2023,41 @@ def do_installment_run(run_id: int, segment: str, date_from: str, date_to: str, 
     from concurrent.futures import ThreadPoolExecutor, as_completed
     conn = get_connection()
     try:
-        soql = inst_val.build_b2c_soql(date_from, date_to, time_from, time_to) if segment == "B2C" else inst_val.build_b2b_soql(date_from, date_to, time_from, time_to)
-        raw  = run_soql_query(soql)
-        records = inst_val.parse_sf_records(raw, segment)
+        if segment == "ChangePlan":
+            # Fetch B2C + B2B change plan pairs combined
+            b2c_pairs = inst_val.parse_changeplan_records(
+                run_soql_query(inst_val.build_changeplan_soql("B2C", date_from, date_to, time_from, time_to)), "B2C"
+            )
+            b2b_pairs = inst_val.parse_changeplan_records(
+                run_soql_query(inst_val.build_changeplan_soql("B2B", date_from, date_to, time_from, time_to)), "B2B"
+            )
+            tasks = [(inst_val.process_changeplan_order, p) for p in b2c_pairs + b2b_pairs]
+        elif segment == "B2C":
+            records = inst_val.parse_sf_records(run_soql_query(inst_val.build_b2c_soql(date_from, date_to, time_from, time_to)), "B2C")
+            tasks   = [(inst_val.process_single, r) for r in records]
+        else:
+            records = inst_val.parse_sf_records(run_soql_query(inst_val.build_b2b_soql(date_from, date_to, time_from, time_to)), "B2B")
+            tasks   = [(inst_val.process_single, r) for r in records]
 
-        total = len(records)
+        total = len(tasks)
         conn.execute("UPDATE installment_runs SET total=? WHERE id=?", (total, run_id))
         conn.commit()
 
         done = clean = mismatch = not_found = 0
 
         with ThreadPoolExecutor(max_workers=3) as ex:
-            futures = {ex.submit(inst_val.process_single, r): r for r in records}
+            futures = {ex.submit(fn, item): (fn, item) for fn, item in tasks}
             for future in as_completed(futures):
                 if _inst_stop_flags.get(run_id):
                     ex.shutdown(wait=False, cancel_futures=True)
                     break
                 res   = future.result()
                 done += 1
-                v     = res.get("validation", "")
+                if res is None:
+                    conn.execute("UPDATE installment_runs SET done=? WHERE id=?", (done, run_id))
+                    conn.commit()
+                    continue
+                v = res.get("validation", "")
                 if v == "✅":    clean     += 1
                 elif v == "⚠️":  mismatch  += 1
                 else:             not_found += 1
@@ -2019,15 +2066,15 @@ def do_installment_run(run_id: int, segment: str, date_from: str, date_to: str, 
                     INSERT INTO installment_results
                     (run_id,segment,order_id,oli_id,sf_bancan,msisdn,product_name,order_reason,
                      contract_term,sf_installment_id,aria_bancan,aria_oli,aria_installment_id,
-                     aria_plan_name,validation,match_status,error)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     aria_plan_name,validation,match_status,error,device_amount,monthly_amount)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     run_id, res.get("segment"), res.get("order_id"), res.get("oli_id"),
                     res.get("sf_bancan"), res.get("msisdn"), res.get("product_name"),
                     res.get("order_reason"), res.get("contract_term"), res.get("sf_installment_id"),
                     res.get("aria_bancan"), res.get("aria_oli"), res.get("aria_installment_id"),
                     res.get("aria_plan_name"), res.get("validation"), res.get("match_status"),
-                    res.get("error"),
+                    res.get("error"), res.get("device_amount"), res.get("monthly_amount"),
                 ))
                 conn.execute(
                     "UPDATE installment_runs SET done=?,clean=?,mismatch=?,not_found=? WHERE id=?",
@@ -2065,8 +2112,8 @@ def get_installment_runs(request: Request):
 @app.post("/api/installment-validator/run")
 def start_installment_run(req: InstallmentRunRequest, background_tasks: BackgroundTasks, request: Request):
     require_session(request)
-    if req.segment not in ("B2C", "B2B"):
-        raise HTTPException(status_code=400, detail="segment must be B2C or B2B")
+    if req.segment not in ("B2C", "B2B", "ChangePlan"):
+        raise HTTPException(status_code=400, detail="segment must be B2C, B2B, or ChangePlan")
     conn = get_connection()
     cur  = conn.execute(
         "INSERT INTO installment_runs (triggered_at, segment, date_from, date_to, status) VALUES (?,?,?,?,?)",
@@ -2118,14 +2165,14 @@ def download_installment_csv(run_id: int, request: Request):
     writer = csv_mod.writer(buf)
     writer.writerow(["Status","SF BAN-CAN","SF Inst ID","SF OLI ID","SF Order ID",
                      "SF Product Name","Order Reason","Aria BAN-CAN","Aria Inst ID","Aria OLI ID",
-                     "Aria Plan","Validation Status","Error"])
+                     "Aria Plan","Validation Status","Device Amount","Monthly Amount","Error"])
     for r in rows:
         r = dict(r)
         writer.writerow([r.get("validation"), r.get("sf_bancan"), r.get("sf_installment_id"),
                          r.get("oli_id"), r.get("order_id"), r.get("product_name"),
                          r.get("order_reason"), r.get("aria_bancan"), r.get("aria_installment_id"),
                          r.get("aria_oli"), r.get("aria_plan_name"), r.get("match_status"),
-                         r.get("error")])
+                         r.get("device_amount"), r.get("monthly_amount"), r.get("error")])
 
     run_dict = dict(run)
     filename = f"installment_{run_dict.get('segment','ALL')}_{run_dict.get('date_from','')}.csv"

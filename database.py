@@ -220,13 +220,19 @@ def init_db():
             validation           TEXT,
             match_status         TEXT,
             error                TEXT,
+            device_amount        TEXT,
+            monthly_amount       TEXT,
             FOREIGN KEY (run_id) REFERENCES installment_runs(id)
         )
     """)
-    # Migrate installment_results — add order_reason if missing
+    # Migrate installment_results
     existing_inst_res = {row[1] for row in c.execute("PRAGMA table_info(installment_results)")}
     if "order_reason" not in existing_inst_res:
         c.execute("ALTER TABLE installment_results ADD COLUMN order_reason TEXT")
+    if "device_amount" not in existing_inst_res:
+        c.execute("ALTER TABLE installment_results ADD COLUMN device_amount TEXT")
+    if "monthly_amount" not in existing_inst_res:
+        c.execute("ALTER TABLE installment_results ADD COLUMN monthly_amount TEXT")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS installment_pending (
@@ -249,9 +255,17 @@ def init_db():
             aria_plan_name       TEXT,
             validation           TEXT,
             match_status         TEXT,
-            error                TEXT
+            error                TEXT,
+            device_amount        TEXT,
+            monthly_amount       TEXT
         )
     """)
+    # Migrate installment_pending
+    existing_inst_pend = {row[1] for row in c.execute("PRAGMA table_info(installment_pending)")}
+    if "device_amount" not in existing_inst_pend:
+        c.execute("ALTER TABLE installment_pending ADD COLUMN device_amount TEXT")
+    if "monthly_amount" not in existing_inst_pend:
+        c.execute("ALTER TABLE installment_pending ADD COLUMN monthly_amount TEXT")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS scheduler_config (

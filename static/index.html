@@ -424,7 +424,8 @@
       <div class="mode-tabs" style="margin:0">
         <button class="mode-tab active" id="inst-tab-b2c"  onclick="setInstSegment('B2C')">B2C</button>
         <button class="mode-tab"        id="inst-tab-b2b"  onclick="setInstSegment('B2B')">B2B</button>
-        <button class="mode-tab"        id="inst-tab-both" onclick="setInstSegment('Both')">Both</button>
+        <button class="mode-tab"        id="inst-tab-cp"   onclick="setInstSegment('ChangePlan')">Change Plan</button>
+        <button class="mode-tab"        id="inst-tab-both" onclick="setInstSegment('Both')">All</button>
       </div>
       <div class="field-wrap">
         <div class="topbar-label">Date From</div>
@@ -528,6 +529,9 @@
         <span class="inst-stat clean"><span class="sv" id="inst-stat-clean">0</span>✅ Clean</span>
         <span class="inst-stat mismatch"><span class="sv" id="inst-stat-mismatch">0</span>⚠️ Mismatch</span>
         <span class="inst-stat notfound"><span class="sv" id="inst-stat-notfound">0</span>❌ Not Found</span>
+        <span id="inst-stat-leak-wrap" style="display:none;margin-left:12px;background:rgba(244,67,54,0.1);border:1px solid rgba(244,67,54,0.4);border-radius:6px;padding:2px 10px">
+          <span style="font-size:11px;color:#f44336;font-weight:700">💰 Leak: </span><span class="sv" id="inst-stat-leak" style="color:#f44336;font-size:13px">0</span>
+        </span>
         <span style="margin-left:auto">
           <button id="inst-dl-btn" onclick="downloadInstallmentCSV()" style="display:none;background:transparent;border:1px solid var(--accent);color:var(--accent);padding:4px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">⬇ CSV</button>
         </span>
@@ -536,7 +540,7 @@
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:300px;color:var(--text-dim)">
           <div style="font-size:36px">📦</div>
           <div style="font-size:15px;font-weight:600;margin-top:12px">Installment Purchase Validator</div>
-          <div style="font-size:12px;margin-top:6px">Select B2C, B2B, or Both, pick a date range, and click Run Validation.</div>
+          <div style="font-size:12px;margin-top:6px">Select B2C, B2B, Change Plan, or All, pick a date range, and click Run Validation.</div>
         </div>
       </div>
     </div>
@@ -1115,10 +1119,9 @@
 
   // ── Installment Purchase Validator ─────────────────────────────────────────────────
   let _instSegment='B2C', _instRunId=null, _instPoller=null;
-  // Both-mode tracking
-  let _instBothPhase=0; // 1=B2C running, 2=B2B running
-  let _instBothB2CId=null, _instBothB2BId=null;
-  let _instBothB2CDone=false;
+  // Both-mode tracking: phase 1=B2C, 2=B2B, 3=ChangePlan
+  let _instBothPhase=0;
+  let _instBothB2CId=null, _instBothB2BId=null, _instBothCPId=null;
 
   function initInstDates(){
     const today=new Date(), yesterday=new Date(today);
@@ -1133,6 +1136,7 @@
     _instSegment=seg;
     document.getElementById('inst-tab-b2c').classList.toggle('active',seg==='B2C');
     document.getElementById('inst-tab-b2b').classList.toggle('active',seg==='B2B');
+    document.getElementById('inst-tab-cp').classList.toggle('active',seg==='ChangePlan');
     document.getElementById('inst-tab-both').classList.toggle('active',seg==='Both');
   }
 
@@ -1148,10 +1152,12 @@
     document.getElementById('inst-stats').style.display='flex';
     document.getElementById('inst-dl-btn').style.display='none';
     document.getElementById('inst-progress-fill').style.width='0%';
+    const _leakWrap=document.getElementById('inst-stat-leak-wrap');
+    if(_leakWrap)_leakWrap.style.display='none';
     document.getElementById('inst-table-wrap').innerHTML='<div style="padding:20px;color:var(--text-dim);font-size:13px">Fetching SF records...</div>';
 
     if(_instSegment==='Both'){
-      _instBothPhase=1; _instBothB2CId=null; _instBothB2BId=null; _instBothB2CDone=false;
+      _instBothPhase=1; _instBothB2CId=null; _instBothB2BId=null; _instBothCPId=null;
       document.getElementById('inst-progress-label').textContent='Starting B2C...';
       try{
         const res=await fetch('/api/installment-validator/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment:'B2C',date_from:dateFrom,time_from:timeFrom,date_to:dateTo,time_to:timeTo})});
@@ -1161,7 +1167,8 @@
         loadInstHistory();
       }catch(e){_instRunFailed(e);}
     } else {
-      document.getElementById('inst-progress-label').textContent='Starting...';
+      const label=_instSegment==='ChangePlan'?'Change Plan':_instSegment;
+      document.getElementById('inst-progress-label').textContent=`Starting ${label}...`;
       try{
         const res=await fetch('/api/installment-validator/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment:_instSegment,date_from:dateFrom,time_from:timeFrom,date_to:dateTo,time_to:timeTo})});
         const d=await res.json();
@@ -1180,8 +1187,8 @@
 
   async function stopInstallmentRun(){
     if(_instBothPhase>0){
-      const id=_instBothPhase===1?_instBothB2CId:_instBothB2BId;
-      if(id)await fetch(`/api/installment-validator/run/${id}/stop`,{method:'POST'});
+      const id=_instBothPhase===1?_instBothB2CId:_instBothPhase===2?_instBothB2BId:_instBothCPId;
+      if(id) await fetch(`/api/installment-validator/run/${id}/stop`,{method:'POST'});
       _instBothPhase=0;
     } else {
       if(!_instRunId)return;
@@ -1215,20 +1222,21 @@
   }
 
   async function pollInstallmentRunBoth(dateFrom,dateTo,timeFrom,timeTo){
-    const currentId=_instBothPhase===1?_instBothB2CId:_instBothB2BId;
+    const currentId=_instBothPhase===1?_instBothB2CId:_instBothPhase===2?_instBothB2BId:_instBothCPId;
     if(!currentId)return;
     try{
       const d=await(await fetch(`/api/installment-validator/run/${currentId}/status`)).json();
       const total=d.total||0, done=d.done||0;
       const pct=total>0?Math.round(done/total*100):0;
-      const phaseLabel=_instBothPhase===1?'B2C':'B2B';
-      document.getElementById('inst-progress-fill').style.width=(_instBothPhase===1?pct/2:50+pct/2)+'%';
+      const phaseLabel=_instBothPhase===1?'B2C':_instBothPhase===2?'B2B':'Change Plan';
+      const basePct=(_instBothPhase-1)*33;
+      const fillPct=Math.min(100,basePct+Math.round(pct/3));
+      document.getElementById('inst-progress-fill').style.width=fillPct+'%';
       document.getElementById('inst-progress-label').textContent=`${phaseLabel}: ${done} / ${total} validated`;
-      document.getElementById('inst-progress-pct').textContent=(_instBothPhase===1?Math.round(pct/2):50+Math.round(pct/2))+'%';
+      document.getElementById('inst-progress-pct').textContent=fillPct+'%';
 
       if(['completed','stopped','failed'].includes(d.status)){
         if(_instBothPhase===1){
-          // B2C done — start B2B
           _instBothPhase=2;
           document.getElementById('inst-progress-label').textContent='B2C done. Starting B2B...';
           try{
@@ -1242,29 +1250,44 @@
             document.getElementById('inst-stop-btn').style.display='none';
             alert('B2B start failed: '+e.message);
           }
+        } else if(_instBothPhase===2){
+          _instBothPhase=3;
+          document.getElementById('inst-progress-label').textContent='B2B done. Starting Change Plan...';
+          try{
+            const res=await fetch('/api/installment-validator/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment:'ChangePlan',date_from:dateFrom,time_from:timeFrom,date_to:dateTo,time_to:timeTo})});
+            const r3=await res.json();
+            _instBothCPId=r3.run_id; _instRunId=r3.run_id;
+            loadInstHistory();
+          }catch(e){
+            clearInterval(_instPoller); _instPoller=null;
+            document.getElementById('inst-run-btn').disabled=false;
+            document.getElementById('inst-stop-btn').style.display='none';
+            alert('Change Plan start failed: '+e.message);
+          }
         } else {
-          // B2B done — load combined results
+          // All 3 phases done — unified table
           clearInterval(_instPoller); _instPoller=null;
           _instBothPhase=0;
           document.getElementById('inst-run-btn').disabled=false;
           document.getElementById('inst-stop-btn').style.display='none';
-          document.getElementById('inst-progress-label').textContent='Completed (B2C + B2B)';
+          document.getElementById('inst-progress-label').textContent='Completed (B2C + B2B + Change Plan)';
           document.getElementById('inst-progress-fill').style.width='100%';
           document.getElementById('inst-progress-pct').textContent='100%';
-          // Fetch and merge both results
-          const [r1,r2]=await Promise.all([
+          const [r1,r2,r3]=await Promise.all([
             fetch(`/api/installment-validator/run/${_instBothB2CId}/results`).then(r=>r.json()),
             fetch(`/api/installment-validator/run/${_instBothB2BId}/results`).then(r=>r.json()),
+            fetch(`/api/installment-validator/run/${_instBothCPId}/results`).then(r=>r.json()),
           ]);
-          const combined=[...(r1.results||[]),...(r2.results||[])];
-          const clean=combined.filter(x=>x.validation==='✅').length;
-          const mismatch=combined.filter(x=>x.validation==='⚠️').length;
-          const notFound=combined.filter(x=>x.validation==='❌').length;
-          document.getElementById('inst-stat-total').textContent=combined.length;
+          const allRows=[...(r1.results||[]),...(r2.results||[]),...(r3.results||[])];
+          const clean=allRows.filter(x=>x.validation==='✅').length;
+          const mismatch=allRows.filter(x=>x.validation==='⚠️').length;
+          const notFound=allRows.filter(x=>x.validation==='❌').length;
+          document.getElementById('inst-stat-total').textContent=allRows.length;
           document.getElementById('inst-stat-clean').textContent=clean;
           document.getElementById('inst-stat-mismatch').textContent=mismatch;
           document.getElementById('inst-stat-notfound').textContent=notFound;
-          renderInstallmentTable(combined);
+          renderInstallmentTable(allRows);
+          _updateInstLeakStat(allRows);
           loadInstHistory();
         }
       }
@@ -1341,8 +1364,27 @@
     }catch(e){alert('Delete failed');}
   }
 
+  function _updateInstLeakStat(rows){
+    const leakWrap=document.getElementById('inst-stat-leak-wrap');
+    const leakEl=document.getElementById('inst-stat-leak');
+    if(!leakWrap||!leakEl)return;
+    const unclean=rows.filter(r=>r.validation==='❌'||r.validation==='⚠️');
+    let total=0;
+    unclean.forEach(r=>{
+      const v=parseFloat(String(r.device_amount||'0').replace(/,/g,''));
+      if(!isNaN(v))total+=v;
+    });
+    if(total>0){
+      leakEl.textContent='SAR '+total.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+      leakWrap.style.display='inline-block';
+    } else {
+      leakWrap.style.display='none';
+    }
+  }
+
   function renderInstallmentTable(rows){
     const dlBtn=document.getElementById('inst-dl-btn');
+    _updateInstLeakStat(rows);
     if(!rows.length){
       document.getElementById('inst-table-wrap').innerHTML='<div style="padding:40px;text-align:center;color:var(--text-dim)">No records found.</div>';
       if(dlBtn)dlBtn.style.display='none';
@@ -1362,6 +1404,8 @@
       {k:'aria_oli',            l:'Aria OLI ID'},
       {k:'aria_plan_name',      l:'Aria Plan'},
       {k:'match_status',        l:'Validation Status'},
+      {k:'device_amount',       l:'Device Amount'},
+      {k:'monthly_amount',      l:'Monthly Amount'},
       {k:'error',               l:'Error'},
     ];
     let th=cols.map(c=>`<th>${c.l}</th>`).join('');
@@ -1491,7 +1535,11 @@
   }
 
   function downloadInstallmentCSV(){
-    if(_instBothB2CId&&_instBothB2BId){
+    if(_instBothB2CId&&_instBothB2BId&&_instBothCPId){
+      window.location.href=`/api/installment-validator/run/${_instBothB2CId}/download/csv`;
+      setTimeout(()=>window.location.href=`/api/installment-validator/run/${_instBothB2BId}/download/csv`,1000);
+      setTimeout(()=>window.location.href=`/api/installment-validator/run/${_instBothCPId}/download/csv`,2000);
+    } else if(_instBothB2CId&&_instBothB2BId){
       window.location.href=`/api/installment-validator/run/${_instBothB2CId}/download/csv`;
       setTimeout(()=>window.location.href=`/api/installment-validator/run/${_instBothB2BId}/download/csv`,1000);
     } else if(_instRunId){
