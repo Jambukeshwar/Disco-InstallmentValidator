@@ -71,8 +71,7 @@ def build_changeplan_soql(date_from: str, date_to: str, time_from: str = "00:00"
         f"WHERE CreatedDate >= {dt_from} AND CreatedDate <= {dt_to} "
         "AND Product2.vlocity_cmt__ObjectTypeName__c IN ('Mobile Phone','Tablet','Accessory','Smart Watch') "
         "AND order.vlocity_cmt__OrderStatus__c = 'Activated' "
-        "AND Order.vlocity_cmt__Reason__c IN ('Change Plan') "
-        "AND order.Type != 'Disconnect'"
+        "AND Order.vlocity_cmt__Reason__c IN ('Change Plan')"
     )
 
 
@@ -118,11 +117,17 @@ def check_aria_full(oli_id: str) -> dict:
     try:
         resp = requests.post(ARIA_URL, json=payload, headers=HEADERS, timeout=30)
         data = resp.json()
-        if data.get("error_code") != 0 or not data.get("plan_instance_details"):
-            return {"aria_found": False, "aria_oli": None, "aria_bancan": None,
+        error_code = data.get("error_code")
+        if error_code != 0:
+            return {"aria_found": False, "aria_api_error": True, "aria_oli": None, "aria_bancan": None,
                     "aria_installment_id": None, "aria_plan_name": None,
                     "device_amount": None, "monthly_amount": None,
-                    "product_field_value": None, "error": data.get("error_msg", "Not found")}
+                    "product_field_value": None, "error": f"Aria error {error_code}: {data.get('error_msg', '')}"}
+        if not data.get("plan_instance_details"):
+            return {"aria_found": False, "aria_api_error": False, "aria_oli": None, "aria_bancan": None,
+                    "aria_installment_id": None, "aria_plan_name": None,
+                    "device_amount": None, "monthly_amount": None,
+                    "product_field_value": None, "error": "Not found"}
         detail = data["plan_instance_details"][0]
         product_field_value = None
         aria_installment_id = None
@@ -186,7 +191,10 @@ def process_changeplan_order(pair: dict):
 
     disc_aria = check_aria_full(disc_oli)
     if not disc_aria["aria_found"]:
-        return None  # Old device had no installment — nothing to validate
+        if disc_aria.get("aria_api_error"):
+            return {**base, **no_aria, "validation": "❌",
+                    "match_status": "Aria API Error (Disconnect OLI)", "error": disc_aria.get("error")}
+        return None  # Genuinely not found — old device had no installment
 
     disc_parts = (disc_aria.get("product_field_value") or "").split("|")
 
@@ -198,9 +206,9 @@ def process_changeplan_order(pair: dict):
     if disc_pos2 < 1:
         return None
 
-    # If 10th position (index 9) is not Active — plan already inactive, no issue — skip
-    disc_pos9 = disc_parts[9].strip() if len(disc_parts) > 9 else ""
-    if disc_pos9.lower() != "active":
+    # Skip if plan status is not active or change plan (e.g. cancelled, terminated)
+    disc_pos9 = disc_parts[9].strip().lower() if len(disc_parts) > 9 else ""
+    if disc_pos9 not in ("active", "change plan"):
         return None
 
     if not add_oli:
