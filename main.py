@@ -1648,6 +1648,30 @@ def _scheduled_daily_report():
             subject_prefix=cfg.get("subject_prefix", ""),
         )
         print(f"[scheduler] Daily report sent for {date_label}")
+        try:
+            from jira_client import create_ticket_with_attachment
+            total_count = len(aria_list)
+            clean_count = sum(1 for r in aria_list if r.get("validation") == "✅")
+            warn_count  = sum(1 for r in aria_list if r.get("validation") == "⚠️")
+            err_count   = sum(1 for r in aria_list if r.get("validation") == "❌")
+            jira_desc = (
+                f"Disconnect Validation Scheduled Run\n"
+                f"Period: {date_label}\n\n"
+                f"Total Records: {total_count}\n"
+                f"Clean: {clean_count}\n"
+                f"Action Needed: {warn_count}\n"
+                f"Error / Not Found: {err_count}\n\n"
+                f"CSV report is attached."
+            )
+            jira_key = create_ticket_with_attachment(
+                summary=f"Disco Validator - Disconnect Run - {date_from}",
+                description=jira_desc,
+                filename=filename,
+                file_bytes=excel_bytes,
+            )
+            print(f"[scheduler] SAC ticket created: {jira_key}")
+        except Exception as je:
+            print(f"[scheduler] SAC ticket creation failed: {je}")
     except Exception as exc:
         print(f"[scheduler] Daily report FAILED: {exc}")
 
@@ -1840,6 +1864,28 @@ def _scheduled_installment_report():
                     smtp_to=cfg.get("smtp_to",""), sender_name=cfg.get("smtp_sender_name",""),
                     subject_prefix=cfg.get("inst_subject_prefix",""))
         print(f"[scheduler] Installment report sent for {date_label}")
+        try:
+            from jira_client import create_ticket_with_attachment
+            jira_desc = (
+                f"Installment Purchase Validation Scheduled Run\n"
+                f"Period: {date_label}\n\n"
+                f"Total Records: {len(all_results)}\n"
+                f"Clean: {clean}\n"
+                f"Mismatch: {mismatch}\n"
+                f"Not Found: {not_found}\n"
+                f"Outstanding Pending: {len(still_pending)}\n"
+                f"Revenue Leak: {revenue_leak}\n\n"
+                f"CSV report is attached."
+            )
+            jira_key = create_ticket_with_attachment(
+                summary=f"Installment Validator - Scheduled Run - {date_from}",
+                description=jira_desc,
+                filename=filename,
+                file_bytes=csv_bytes,
+            )
+            print(f"[scheduler] SAC ticket created: {jira_key}")
+        except Exception as je:
+            print(f"[scheduler] SAC ticket creation failed: {je}")
     except Exception as exc:
         print(f"[scheduler] Installment report FAILED: {exc}")
 
