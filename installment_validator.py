@@ -224,7 +224,23 @@ def process_changeplan_order(pair: dict):
 
     add_parts    = (add_aria.get("product_field_value") or "").split("|")
     bancan_match = (add_aria.get("aria_bancan") or "") == sf_bancan
-    string_match = disc_parts[:6] == add_parts[:6]
+
+    def _pos_equal(a, b):
+        a, b = a.strip(), b.strip()
+        if a == b:
+            return True
+        try:
+            return float(a) == float(b)
+        except (ValueError, TypeError):
+            return False
+
+    string_match = all(
+        _pos_equal(
+            disc_parts[i] if i < len(disc_parts) else "",
+            add_parts[i]  if i < len(add_parts)  else ""
+        )
+        for i in range(6)
+    )
 
     if bancan_match and string_match:
         validation, match_status = "✅", "Clean"
