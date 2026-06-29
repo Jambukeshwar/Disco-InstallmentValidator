@@ -1,0 +1,757 @@
+<!--
+Design plan:
+  Color: #0A0F1E bg (deep navy), #111927 surface, #18243A card
+         border #243048, aria=#F0883E, matrixx=#3FB950, sf=#58A6FF
+         executor=#A371F7, ai=#F778BA, text=#E6EDF3, muted=#7D8FA8
+  Type:  'Cascadia Code' / monospace stack for labels/code; system-ui for body
+  Layout: Vertical flow, 80px right-aligned label column + content;
+          max-width 960px centered; overflow-x:auto wrapper for small screens
+-->
+<title>Disconnect Validator — Architecture</title>
+<style>
+  :root {
+    --bg:       #0A0F1E;
+    --surface:  #111927;
+    --card:     #18243A;
+    --border:   #243048;
+    --brite:    #2E3E5A;
+    --text:     #E6EDF3;
+    --muted:    #7D8FA8;
+    --dim:      #4A5E78;
+    --aria:     #F0883E;
+    --matrixx:  #3FB950;
+    --sf:       #58A6FF;
+    --exec:     #A371F7;
+    --ai:       #F778BA;
+    --warn:     #F0883E;
+    --err:      #F85149;
+    --ok:       #3FB950;
+    --info:     #79C0FF;
+    --mono: 'Cascadia Code','JetBrains Mono','Fira Code',ui-monospace,monospace;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system,'Segoe UI',system-ui,sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 40px 20px 60px;
+  }
+
+  .scroll-outer { overflow-x: auto; }
+
+  .wrapper {
+    max-width: 980px;
+    min-width: 760px;
+    margin: 0 auto;
+  }
+
+  /* ── Header ──────────────────────────────── */
+  .hdr {
+    text-align: center;
+    margin-bottom: 52px;
+  }
+  .hdr-eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .18em;
+    color: var(--dim);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .hdr h1 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+  .hdr p {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .hdr-dot { color: var(--dim); margin: 0 6px; }
+
+  /* ── Layer row ───────────────────────────── */
+  .layer {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+  }
+  .lbl {
+    width: 88px;
+    flex-shrink: 0;
+    padding-top: 15px;
+    text-align: right;
+    padding-right: 16px;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: .13em;
+    color: var(--dim);
+    text-transform: uppercase;
+    line-height: 1.3;
+  }
+  .lc { flex: 1; min-width: 0; }
+  .lc.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .lc.three { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+
+  /* ── Nodes ───────────────────────────────── */
+  .node {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 13px 15px;
+  }
+  .node-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 3px;
+  }
+  .node-sub {
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+  .node-mono {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--dim);
+    margin-top: 2px;
+  }
+
+  /* ── Chips ───────────────────────────────── */
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+  .chip {
+    font-family: var(--mono);
+    font-size: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 7px;
+    color: var(--muted);
+  }
+
+  /* ── Connectors ──────────────────────────── */
+  .conn { margin-left: 88px; }
+
+  /* simple arrow */
+  .arr {
+    height: 28px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .arr::before {
+    content: '';
+    width: 1.5px;
+    height: 18px;
+    background: var(--brite);
+    display: block;
+  }
+  .arr::after {
+    content: '';
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--brite);
+    display: block;
+  }
+
+  /* SVG connectors share this wrapper */
+  .svg-conn svg { display: block; }
+
+  /* ── Executor node ───────────────────────── */
+  .node-exec {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--exec);
+    border-radius: 7px;
+    padding: 13px 15px;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+  }
+  .exec-main { flex: 1; }
+  .exec-stop {
+    flex-shrink: 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 8px 11px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--dim);
+    line-height: 1.7;
+  }
+  .exec-stop-title {
+    font-size: 9px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--err);
+    margin-bottom: 4px;
+  }
+
+  /* ── Validator cards ─────────────────────── */
+  .vc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .vc.aria    { border-top: 2px solid var(--aria); }
+  .vc.matrixx { border-top: 2px solid var(--matrixx); }
+  .vc.sfasset { border-top: 2px solid var(--sf); }
+
+  .vc-hdr {
+    padding: 10px 13px 9px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .vc-name {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .08em;
+  }
+  .vc.aria    .vc-name { color: var(--aria); }
+  .vc.matrixx .vc-name { color: var(--matrixx); }
+  .vc.sfasset .vc-name { color: var(--sf); }
+
+  .vc-file {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    color: var(--dim);
+  }
+
+  .vc-apis {
+    padding: 9px 13px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .api-row {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    padding: 1.5px 0;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .api-row::before {
+    content: '→';
+    color: var(--dim);
+    font-size: 9px;
+  }
+
+  .vc-flags {
+    padding: 9px 13px;
+    background: var(--card);
+    flex: 1;
+  }
+  .flags-lbl {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 7px;
+  }
+  .flags { display: flex; flex-direction: column; gap: 4px; }
+  .flag {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .flag::before { content: ''; width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+  .flag.w { background: rgba(240,136,62,.1);  border: 1px solid rgba(240,136,62,.25); color: var(--warn); }
+  .flag.e { background: rgba(248, 81,73,.1);  border: 1px solid rgba(248, 81,73,.25); color: var(--err);  }
+  .flag.k { background: rgba( 63,185,80,.1);  border: 1px solid rgba( 63,185,80,.25); color: var(--ok);   }
+  .flag.i { background: rgba(121,192,255,.1); border: 1px solid rgba(121,192,255,.25);color: var(--info); }
+  .flag.w::before { background: var(--warn); }
+  .flag.e::before { background: var(--err); }
+  .flag.k::before { background: var(--ok); }
+  .flag.i::before { background: var(--info); }
+
+  .vc-db {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--dim);
+    padding: 7px 13px;
+    border-top: 1px solid var(--border);
+    text-align: right;
+  }
+
+  /* ── Database layer ──────────────────────── */
+  .node-db {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 13px 15px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  .db-tables {
+    display: grid;
+    grid-template-columns: repeat(4, auto);
+    gap: 6px;
+    flex: 1;
+  }
+  .db-table {
+    font-family: var(--mono);
+    font-size: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 3px 9px;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  /* ── AI Insights node ────────────────────── */
+  .node-ai {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--ai);
+    border-radius: 7px;
+    padding: 13px 15px;
+  }
+  .ai-rules {
+    margin-top: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .ai-rule {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .rule-n {
+    font-family: var(--mono);
+    font-size: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--ai);
+    margin-top: 1px;
+  }
+  .rule-txt em {
+    font-style: normal;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--text);
+  }
+
+  /* ── Output layer ────────────────────────── */
+  .node-actions {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 13px 15px;
+  }
+  .act-group { margin-bottom: 10px; }
+  .act-group:last-child { margin-bottom: 0; }
+  .act-src {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    color: var(--dim);
+    margin-bottom: 6px;
+  }
+  .act-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+  .act-tag {
+    font-size: 11px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 8px;
+    color: var(--text);
+  }
+
+  .node-export {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 13px 15px;
+  }
+
+  /* ── Legend ──────────────────────────────── */
+  .legend {
+    margin-top: 40px;
+    display: flex;
+    justify-content: center;
+    gap: 28px;
+  }
+  .leg-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .leg-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .leg-dot.ok   { background: var(--ok); }
+  .leg-dot.warn { background: var(--warn); }
+  .leg-dot.err  { background: var(--err); }
+  .leg-dot.info { background: var(--info); }
+
+  /* ── Poll banner ──────────────────────────── */
+  .poll-bar {
+    margin-top: 8px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 7px 13px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .poll-label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--dim);
+    flex-shrink: 0;
+  }
+  .poll-code {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--info);
+  }
+</style>
+
+<div class="scroll-outer">
+<div class="wrapper">
+
+  <!-- Header -->
+  <header class="hdr">
+    <div class="hdr-eyebrow">System Architecture</div>
+    <h1>Disconnect Validator</h1>
+    <p>Post-disconnect cleanup validation<span class="hdr-dot">·</span>Aria<span class="hdr-dot">·</span>Matrixx<span class="hdr-dot">·</span>Salesforce</p>
+  </header>
+
+  <!-- ① INPUT ─────────────────────────────────────── -->
+  <div class="layer">
+    <div class="lbl">Input</div>
+    <div class="lc two">
+      <div class="node">
+        <div class="node-name">SF Run</div>
+        <div class="node-sub">Date range → Salesforce SOQL</div>
+        <div class="chips">
+          <span class="chip">date_from</span>
+          <span class="chip">date_to</span>
+          <span class="chip">time window</span>
+        </div>
+      </div>
+      <div class="node">
+        <div class="node-name">Manual Run</div>
+        <div class="node-sub">Paste MSISDN list directly</div>
+        <div class="chips">
+          <span class="chip">msisdn_list[]</span>
+          <span class="chip">BAN-CAN</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- merge connector: 2 → 1 -->
+  <div class="conn svg-conn">
+    <svg width="100%" height="40" viewBox="0 0 100 40" preserveAspectRatio="none">
+      <line x1="25" y1="2" x2="25" y2="20" stroke="#2E3E5A" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <line x1="75" y1="2" x2="75" y2="20" stroke="#2E3E5A" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <line x1="25" y1="20" x2="75" y2="20" stroke="#2E3E5A" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <line x1="50" y1="20" x2="50" y2="38" stroke="#2E3E5A" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <polygon points="50,40 49.5,34 50.5,34" fill="#2E3E5A"/>
+    </svg>
+  </div>
+
+  <!-- ② SALESFORCE SOQL ───────────────────────────── -->
+  <div class="layer">
+    <div class="lbl">Salesforce</div>
+    <div class="lc">
+      <div class="node">
+        <div class="node-name">salesforce.py — SOQL Query</div>
+        <div class="node-sub">Fetches recent disconnect orders · Extracts MSISDN + BAN-CAN + Disconnection Reason per order</div>
+        <div class="chips">
+          <span class="chip">MSISDN</span>
+          <span class="chip">BAN-CAN</span>
+          <span class="chip">Disconnection Reason</span>
+          <span class="chip">Order Date</span>
+          <span class="chip">Order Type</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- simple arrow -->
+  <div class="conn arr"></div>
+
+  <!-- ③ THREAD POOL ──────────────────────────────── -->
+  <div class="layer">
+    <div class="lbl">Concurrency</div>
+    <div class="lc">
+      <div class="node-exec">
+        <div class="exec-main">
+          <div class="node-name" style="color:var(--exec)">ThreadPoolExecutor — max 3 workers</div>
+          <div class="node-sub">main.py · Dispatches each MSISDN to all 3 validators concurrently · run_id tracks each execution</div>
+          <div class="poll-bar">
+            <span class="poll-label">Poll</span>
+            <span class="poll-code">GET /api/runs/{run_id}/status</span>
+            <span style="color:var(--dim)">→ total / success / error / warn counts until complete</span>
+          </div>
+        </div>
+        <div class="exec-stop">
+          <div class="exec-stop-title">Stop Control</div>
+          POST /api/runs/{id}/stop<br>
+          _stop_flags[run_id] = True<br>
+          workers check between MSISDNs
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- fork connector: 1 → 3 -->
+  <div class="conn svg-conn">
+    <svg width="100%" height="44" viewBox="0 0 100 44" preserveAspectRatio="none">
+      <line x1="50" y1="0" x2="50" y2="20" stroke="#2E3E5A" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <line x1="16.5" y1="20" x2="83.5" y2="20" stroke="#2E3E5A" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <!-- aria branch -->
+      <line x1="16.5" y1="20" x2="16.5" y2="42" stroke="#F0883E" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <polygon points="16.5,44 16,38 17,38" fill="#F0883E"/>
+      <!-- matrixx branch -->
+      <line x1="50" y1="20" x2="50" y2="42" stroke="#3FB950" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <polygon points="50,44 49.5,38 50.5,38" fill="#3FB950"/>
+      <!-- sf branch -->
+      <line x1="83.5" y1="20" x2="83.5" y2="42" stroke="#58A6FF" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <polygon points="83.5,44 83,38 84,38" fill="#58A6FF"/>
+    </svg>
+  </div>
+
+  <!-- ④ PARALLEL VALIDATORS ──────────────────────── -->
+  <div class="layer">
+    <div class="lbl">Parallel<br>Validation</div>
+    <div class="lc three">
+
+      <!-- ARIA -->
+      <div class="vc aria">
+        <div class="vc-hdr">
+          <span class="vc-name">ARIA</span>
+          <span class="vc-file">aria_validator.py</span>
+        </div>
+        <div class="vc-apis">
+          <div class="api-row">get_plan_instance_information_m</div>
+          <div class="api-row">get_acct_plans_m</div>
+          <div class="api-row">get_acct_details_all_m</div>
+          <div class="api-row">get_order_m + get_order_items_m</div>
+        </div>
+        <div class="vc-flags">
+          <div class="flags-lbl">Flags (field_to_review)</div>
+          <div class="flags">
+            <span class="flag w">Plan_Status</span>
+            <span class="flag w">Device_Status</span>
+            <span class="flag w">NSO</span>
+            <span class="flag w">Installment_Status</span>
+            <span class="flag i">Possible_reactivation</span>
+            <span class="flag k">No_Action_Required</span>
+          </div>
+        </div>
+        <div class="vc-db">→ results table</div>
+      </div>
+
+      <!-- MATRIXX -->
+      <div class="vc matrixx">
+        <div class="vc-hdr">
+          <span class="vc-name">MATRIXX</span>
+          <span class="vc-file">matrixx_validator.py</span>
+        </div>
+        <div class="vc-apis">
+          <div class="api-row">GET /subscription (by MSISDN)</div>
+          <div class="api-row">GET /device</div>
+          <div class="api-row" style="color:var(--dim)">↳ 2 concurrent threads</div>
+          <div class="api-row" style="color:var(--dim)">↳ kubectl port-forward :9090</div>
+        </div>
+        <div class="vc-flags">
+          <div class="flags-lbl">Flags (field_to_review)</div>
+          <div class="flags">
+            <span class="flag w">Subscription_Active</span>
+            <span class="flag w">Plan_Active</span>
+            <span class="flag w">Device_Active</span>
+            <span class="flag e">BANCAN_Mismatch</span>
+            <span class="flag k">No_Action_Required</span>
+          </div>
+        </div>
+        <div class="vc-db">→ matrixx_results table</div>
+      </div>
+
+      <!-- SF ASSET -->
+      <div class="vc sfasset">
+        <div class="vc-hdr">
+          <span class="vc-name">SF ASSET</span>
+          <span class="vc-file">sf_asset_validator.py</span>
+        </div>
+        <div class="vc-apis">
+          <div class="api-row">SOQL: Asset object</div>
+          <div class="api-row">Exclude SIM Card type</div>
+          <div class="api-row">Most recent LastModifiedDate</div>
+          <div class="api-row">vlocity_cmt__ProvisioningStatus__c</div>
+        </div>
+        <div class="vc-flags">
+          <div class="flags-lbl">Flags (field_to_review)</div>
+          <div class="flags">
+            <span class="flag w">Prov_Not_Disconnected</span>
+            <span class="flag e">BANCAN_Mismatch</span>
+            <span class="flag e">Reason_Not_Matched</span>
+            <span class="flag e">Asset_Not_Found</span>
+          </div>
+        </div>
+        <div class="vc-db">→ sf_asset_results table</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- join connector: 3 → 1 -->
+  <div class="conn svg-conn">
+    <svg width="100%" height="44" viewBox="0 0 100 44" preserveAspectRatio="none">
+      <line x1="16.5" y1="0" x2="16.5" y2="22" stroke="#F0883E" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <line x1="50"   y1="0" x2="50"   y2="22" stroke="#3FB950" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <line x1="83.5" y1="0" x2="83.5" y2="22" stroke="#58A6FF" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <line x1="16.5" y1="22" x2="83.5" y2="22" stroke="#2E3E5A" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <line x1="50" y1="22" x2="50" y2="42" stroke="#2E3E5A" stroke-width=".4" vector-effect="non-scaling-stroke"/>
+      <polygon points="50,44 49.5,38 50.5,38" fill="#2E3E5A"/>
+    </svg>
+  </div>
+
+  <!-- ⑤ DATABASE ──────────────────────────────────── -->
+  <div class="layer">
+    <div class="lbl">Storage</div>
+    <div class="lc">
+      <div class="node">
+        <div class="node-name">SQLite Database — database.py</div>
+        <div class="chips" style="margin-top:9px">
+          <span class="chip">results</span>
+          <span class="chip">matrixx_results</span>
+          <span class="chip">sf_asset_results</span>
+          <span class="chip">runs</span>
+          <span class="chip">sessions</span>
+          <span class="chip">users</span>
+        </div>
+        <div class="node-sub" style="margin-top:8px">Last 5 runs retained · Older runs + results auto-deleted · PRAGMA migrations for schema evolution</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- simple arrow -->
+  <div class="conn arr"></div>
+
+  <!-- ⑥ AI INSIGHTS ──────────────────────────────── -->
+  <div class="layer">
+    <div class="lbl">Intelligence</div>
+    <div class="lc">
+      <div class="node-ai">
+        <div class="node-name" style="color:var(--ai)">AI Insights — generate_suggestion()</div>
+        <div class="node-sub">Rule-based engine in main.py · Combines Aria + Matrixx <code style="font-family:var(--mono);font-size:11px">field_to_review</code> flags into ordered corrective action plan</div>
+        <div class="ai-rules">
+          <div class="ai-rule">
+            <div class="rule-n">1</div>
+            <div class="rule-txt"><em>BANCAN_Mismatch</em> → Stop. No actions suggested — investigate manually</div>
+          </div>
+          <div class="ai-rule">
+            <div class="rule-n">2</div>
+            <div class="rule-txt"><em>Possible_reactivation</em> → Verify account was intentionally disconnected before acting</div>
+          </div>
+          <div class="ai-rule">
+            <div class="rule-n">3</div>
+            <div class="rule-txt">Plan already Cancelled but NSO/device work pending → <em>Activate Plan</em> → do work → <em>Cancel Plan</em></div>
+          </div>
+          <div class="ai-rule">
+            <div class="rule-n">4</div>
+            <div class="rule-txt">Normal flow: <em>Create NSO</em> → <em>Cancel Device Plan</em> → <em>Cancel Main Plan</em> → <em>Matrixx Deactivate</em></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- simple arrow -->
+  <div class="conn arr"></div>
+
+  <!-- ⑦ OUTPUT ────────────────────────────────────── -->
+  <div class="layer">
+    <div class="lbl">Output</div>
+    <div class="lc two">
+
+      <div class="node-actions">
+        <div class="node-name">Corrective Actions</div>
+        <div style="margin-top:10px">
+          <div class="act-group">
+            <div class="act-src">aria_actions.py</div>
+            <div class="act-tags">
+              <span class="act-tag">Cancel Plan</span>
+              <span class="act-tag">Cancel Installment</span>
+              <span class="act-tag">Create NSO Order</span>
+              <span class="act-tag">Activate Plan</span>
+            </div>
+          </div>
+          <div class="act-group">
+            <div class="act-src">matrixx_actions.py</div>
+            <div class="act-tags">
+              <span class="act-tag">Deactivate Device</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="node-export">
+        <div class="node-name">Excel Export</div>
+        <div class="node-mono" style="margin-top:4px">GET /api/runs/{run_id}/download</div>
+        <div class="chips" style="margin-top:10px">
+          <span class="chip">MSISDN</span>
+          <span class="chip">BAN-CAN</span>
+          <span class="chip">Aria flags</span>
+          <span class="chip">Matrixx flags</span>
+          <span class="chip">SF Asset flags</span>
+          <span class="chip">AI Suggestion</span>
+        </div>
+        <div class="node-sub" style="margin-top:8px">One sheet per validator · Combined summary sheet</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <div class="leg-item"><div class="leg-dot ok"></div>✅ Clean — No_Action_Required</div>
+    <div class="leg-item"><div class="leg-dot warn"></div>⚠️ Action Needed</div>
+    <div class="leg-item"><div class="leg-dot err"></div>❌ Error / Not Found</div>
+    <div class="leg-item"><div class="leg-dot info"></div>ℹ️ Investigate</div>
+  </div>
+
+</div>
+</div>

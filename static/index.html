@@ -1343,12 +1343,14 @@
       const inProgress=r.status==='running';
       const icon=r.status==='running'?'🔄':r.status==='completed'?'✅':r.status==='stopped'?'⏹':'❌';
       const stopBtn=inProgress?`<button onclick="event.stopPropagation();stopInstallmentRun()" title="Stop" style="background:var(--red);color:#fff;border:none;border-radius:3px;padding:2px 6px;cursor:pointer;font-size:10px;margin-left:4px">■</button>`:'';
+      const dlBtn=r.status==='completed'?`<button onclick="event.stopPropagation();window.location.href='/api/installment-validator/run/${r.id}/download/csv'" title="Download CSV" style="background:none;border:1px solid var(--accent);color:var(--accent);border-radius:3px;padding:2px 6px;cursor:pointer;font-size:10px;margin-left:4px">⬇ CSV</button>`:'';
+      const rerunBtn=r.status==='failed'?`<button onclick="event.stopPropagation();rerunInstallmentRun(${r.id},'${r.segment}','${r.date_from}','${r.date_to}')" title="Rerun this segment" style="background:var(--accent2);color:#fff;border:none;border-radius:3px;padding:2px 7px;cursor:pointer;font-size:10px;margin-left:4px">↺ Rerun</button>`:'';
       const delBtn=!inProgress?`<button onclick="event.stopPropagation();deleteInstRun(${r.id})" title="Delete" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:13px;padding:2px 4px;margin-left:4px" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text-dim)'">🗑</button>`:'';
       const clean=r.clean||0, mismatch=r.mismatch||0, notFound=r.not_found||0;
       return `<div class="run-item ${r.id===_instRunId?'active':''}" onclick="loadInstRun(${r.id})">
         <div class="run-item-dates" style="display:flex;align-items:center;justify-content:space-between">
           <span>${icon} ${r.segment||'?'} · ${r.date_from||''}</span>
-          <span>${stopBtn}${delBtn}</span>
+          <span>${stopBtn}${rerunBtn}${dlBtn}${delBtn}</span>
         </div>
         <div class="run-item-meta"><span class="run-item-time">${formatTime(r.triggered_at)}</span><span class="badge badge-${r.status}">${r.status}</span></div>
         <div class="run-item-counts" style="font-size:11px;color:var(--text-dim);margin-top:3px">
@@ -1390,6 +1392,28 @@
       }
       loadInstHistory();
     }catch(e){alert('Delete failed');}
+  }
+
+  async function rerunInstallmentRun(originalRunId, segment, dateFrom, dateTo){
+    if(!confirm(`Rerun failed ${segment} segment for ${dateFrom} → ${dateTo}?`))return;
+    try{
+      const res=await fetch('/api/installment-validator/run',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({segment, date_from:dateFrom, date_to:dateTo})
+      });
+      const d=await res.json();
+      if(!res.ok){alert('Failed to start rerun: '+(d.detail||'Unknown error'));return;}
+      _instRunId=d.run_id;
+      document.getElementById('inst-progress').style.display='block';
+      document.getElementById('inst-progress-label').textContent=`Rerunning ${segment} (${dateFrom})...`;
+      document.getElementById('inst-progress-bar').style.width='0%';
+      document.getElementById('inst-progress-pct').textContent='0%';
+      document.getElementById('inst-stop-btn').style.display='inline-block';
+      document.getElementById('inst-run-btn').disabled=true;
+      _instPoller=setInterval(pollInstallmentRun,2000);
+      loadInstHistory();
+    }catch(e){alert('Rerun failed: '+e.message);}
   }
 
   function _updateInstLeakStat(rows){

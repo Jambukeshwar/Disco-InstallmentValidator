@@ -1789,6 +1789,7 @@ def _scheduled_installment_report():
             return
 
         all_results = []
+        failed_segs = []  # track segments that fail so email/SAC can warn
         for seg in ("B2C", "B2B", "ChangePlan"):
             conn = get_connection()
             cur  = conn.execute(
@@ -1799,6 +1800,10 @@ def _scheduled_installment_report():
             conn.commit(); conn.close()
             do_installment_run(run_id, seg, date_from, date_to)
             conn2 = get_connection()
+            run_row = conn2.execute("SELECT status FROM installment_runs WHERE id=?", (run_id,)).fetchone()
+            if run_row and run_row["status"] == "failed":
+                failed_segs.append({"segment": seg, "run_id": run_id, "date_from": date_from, "date_to": date_to})
+                print(f"[scheduler] Segment {seg} FAILED (run_id={run_id}) — continuing with remaining segments")
             rows  = conn2.execute("SELECT * FROM installment_results WHERE run_id=?", (run_id,)).fetchall()
             conn2.close()
             all_results.extend([dict(r) for r in rows])
@@ -1823,6 +1828,15 @@ def _scheduled_installment_report():
                              r.get("aria_installment_id"),r.get("aria_oli"),r.get("aria_plan_name"),
                              r.get("match_status"),r.get("device_amount"),r.get("monthly_amount"),
                              r.get("error")])
+
+        # Append failed segments section to CSV
+        if failed_segs:
+            writer.writerow([])
+            writer.writerow(["--- FAILED SEGMENTS (no data collected) ---"])
+            writer.writerow(["Segment","Run ID","Date From","Date To","Note"])
+            for f in failed_segs:
+                writer.writerow([f["segment"], f["run_id"], f["date_from"], f["date_to"],
+                                 "Segment failed — rerun manually from the Installment Validator UI"])
 
         # Append pending section to CSV
         if still_pending:
@@ -1857,7 +1871,7 @@ def _scheduled_installment_report():
 
         html_body = _build_installment_email_html(
             date_label, len(all_results), clean, mismatch, not_found,
-            still_pending, resolved, revenue_leak,
+            still_pending, resolved, revenue_leak, failed_segs,
         )
 
         send_report(f"Installment — {date_label}", html_body, csv_bytes, filename,
@@ -1866,6 +1880,12 @@ def _scheduled_installment_report():
         print(f"[scheduler] Installment report sent for {date_label}")
         try:
             from jira_client import create_ticket_with_attachment
+            failed_note = ""
+            if failed_segs:
+                failed_note = "\n\n⚠️ FAILED SEGMENTS (no data collected):\n" + "\n".join(
+                    f"  - {f['segment']} (run_id={f['run_id']}, dates={f['date_from']} to {f['date_to']})"
+                    for f in failed_segs
+                ) + "\nPlease rerun these segments manually from the Installment Validator UI."
             jira_desc = (
                 f"Installment Purchase Validation Scheduled Run\n"
                 f"Period: {date_label}\n\n"
@@ -1874,7 +1894,8 @@ def _scheduled_installment_report():
                 f"Mismatch: {mismatch}\n"
                 f"Not Found: {not_found}\n"
                 f"Outstanding Pending: {len(still_pending)}\n"
-                f"Revenue Leak: {revenue_leak}\n\n"
+                f"Revenue Leak: {revenue_leak}"
+                f"{failed_note}\n\n"
                 f"CSV report is attached."
             )
             jira_key = create_ticket_with_attachment(
@@ -1891,9 +1912,44 @@ def _scheduled_installment_report():
 
 
 def _build_installment_email_html(date_label, total, clean, mismatch, not_found,
-                                   still_pending=None, resolved=None, revenue_leak=0.0):
+                                   still_pending=None, resolved=None, revenue_leak=0.0, failed_segs=None):
     still_pending = still_pending or []
     resolved      = resolved or []
+    failed_segs   = failed_segs or []
+
+    failed_section = ""
+    if failed_segs:
+        rows_html = "".join(
+            f"""<tr style="border-bottom:1px solid #21262d">
+              <td style="padding:8px 10px;font-size:12px;font-weight:700;color:#f44336">{f['segment']}</td>
+              <td style="padding:8px 10px;font-size:11px;font-family:monospace;color:#8b949e">{f['date_from']} → {f['date_to']}</td>
+              <td style="padding:8px 10px;font-size:11px;color:#8b949e">run_id: {f['run_id']}</td>
+              <td style="padding:8px 10px;font-size:11px;color:#f0883e">Rerun manually from Installment Validator UI</td>
+            </tr>"""
+            for f in failed_segs
+        )
+        failed_section = f"""
+        <tr><td style="padding:16px 24px">
+          <div style="background:rgba(244,67,54,0.08);border:1px solid rgba(244,67,54,0.4);border-radius:8px;padding:16px">
+            <div style="font-size:13px;font-weight:700;color:#f44336;margin-bottom:10px">
+              ⚠️ {len(failed_segs)} Segment{'s' if len(failed_segs)>1 else ''} Failed — Data Missing from This Report
+            </div>
+            <div style="font-size:12px;color:#8b949e;margin-bottom:12px">
+              The following segments encountered errors during the scheduled run. Their records are <strong>not included</strong> in the totals or CSV above. Please rerun them manually.
+            </div>
+            <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #30363d;border-radius:6px;overflow:hidden">
+              <thead>
+                <tr style="background:#21262d">
+                  <th style="padding:8px 10px;font-size:10px;color:#8b949e;text-align:left;text-transform:uppercase">Segment</th>
+                  <th style="padding:8px 10px;font-size:10px;color:#8b949e;text-align:left;text-transform:uppercase">Date Range</th>
+                  <th style="padding:8px 10px;font-size:10px;color:#8b949e;text-align:left;text-transform:uppercase">Run ID</th>
+                  <th style="padding:8px 10px;font-size:10px;color:#8b949e;text-align:left;text-transform:uppercase">Action</th>
+                </tr>
+              </thead>
+              <tbody>{rows_html}</tbody>
+            </table>
+          </div>
+        </td></tr>"""
 
     pending_section = ""
     if still_pending:
@@ -1987,6 +2043,7 @@ def _build_installment_email_html(date_label, total, clean, mismatch, not_found,
             </tr>
           </table>
         </td></tr>
+        {failed_section}
         {resolved_note}
         {revenue_leak_section}
         {pending_section}
