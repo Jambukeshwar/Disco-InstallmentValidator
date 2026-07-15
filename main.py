@@ -932,9 +932,10 @@ def clear_runs(request: Request):
 def list_runs(request: Request):
     require_session(request)
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM runs ORDER BY triggered_at DESC LIMIT 5"
-    ).fetchall()
+    rows = conn.execute("""
+        SELECT r.*, (SELECT COUNT(*) FROM results WHERE run_id = r.id) AS record_count
+        FROM runs r ORDER BY triggered_at DESC LIMIT 5
+    """).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -957,7 +958,10 @@ def get_run(run_id: int, request: Request):
 def get_run_status(run_id: int, request: Request):
     require_session(request)
     conn = get_connection()
-    run = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    run = conn.execute("""
+        SELECT r.*, (SELECT COUNT(*) FROM results WHERE run_id = r.id) AS record_count
+        FROM runs r WHERE r.id = ?
+    """, (run_id,)).fetchone()
     conn.close()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")

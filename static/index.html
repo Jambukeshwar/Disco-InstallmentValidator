@@ -2062,7 +2062,7 @@
       return `<div class="run-item ${r.id===currentRunId?'active':''}" onclick="loadRun(${r.id})">
         <div class="run-item-dates">${lbl}</div>
         <div class="run-item-meta"><span class="run-item-time">${formatTime(r.triggered_at)}</span><span class="badge badge-${r.status}">${r.status}</span></div>
-        <div class="run-item-counts">${r.total_count} records · ✅${r.success_count} ⚠️${r.warn_count||0} ❌${r.error_count}</div>
+        <div class="run-item-counts">${r.total_count} MSISDNs · ${r.record_count||r.total_count} records · ✅${r.success_count} ⚠️${r.warn_count||0} ❌${r.error_count}</div>
       </div>`;
     }).join('');
   }
