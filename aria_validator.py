@@ -198,48 +198,24 @@ def _select_best_device(device_plans: list) -> dict:
         return max(cancelled_plans, key=lambda cp: _parse_date(cp.get('plan_instance_status_date')))
 
 
-def process_single(msisdn: str, activated_date: str = None, order_ban: str = None) -> dict:
-    """Process one MSISDN and return a result dict."""
+def _validate_plan_instance(msisdn: str, plan: dict, activated_date: str = None, order_ban: str = None) -> dict:
+    """Validate a single plan instance using its own BAN-CAN for all API calls."""
     try:
-        plan_details = plan_detailsfn(msisdn)
-
-        if plan_details.get('error_msg') != 'OK' or plan_details.get('total_records', 0) == 0:
-            error = plan_details.get('error_msg', 'No Data Found')
-            return {"msisdn": msisdn, "order_ban": order_ban, "error_msg": error}
-
-        total = plan_details['total_records']
-        final_plan = None
-
-        if total > 1:
-            def parse_status_date(item):
-                d = item.get('status_date')
-                if d:
-                    try:
-                        return datetime.strptime(d, "%Y-%m-%d %H:%M:%S")
-                    except ValueError:
-                        pass
-                return datetime.min
-            final_plan = max(plan_details['plan_instance_details'], key=parse_status_date)
-        else:
-            final_plan = plan_details['plan_instance_details'][0]
-
-        if not final_plan:
-            return {"msisdn": msisdn, "order_ban": order_ban, "error_msg": "No recent plan found"}
-
-        user_id                 = final_plan.get('user_id')
-        client_plan_instance_id = final_plan.get('client_plan_instance_id')
-        plan_name               = final_plan.get('plan_name')
-        status                  = final_plan.get('status_cd')
-        plan_status_date        = final_plan.get('status_date')
+        user_id                 = plan.get('user_id')
+        client_plan_instance_id = plan.get('client_plan_instance_id')
+        plan_name               = plan.get('plan_name')
+        status                  = plan.get('status_cd')
+        plan_status_date        = plan.get('status_date')
         plan_status_cd          = 'Active' if status == 1 else 'Cancelled'
 
+        # Each plan uses its own BAN-CAN — handles MSISDN migrated across accounts
         child_plan = child_planfn(user_id)
 
-        masterplanstatus      = 'N/A'
-        No_of_inst            = No_of_Active_inst = 0
-        String_details        = NSOExist = Installmentstatus = 'N/A'
+        masterplanstatus = 'N/A'
+        No_of_inst = No_of_Active_inst = 0
+        String_details = NSOExist = Installmentstatus = 'N/A'
 
-        # ── Collect ALL matching device plans ─────────────────────────────
+        # ── Collect device plans linked to THIS plan instance ─────────────
         device_plans = []
         for cp in child_plan:
             if cp['client_plan_id'] == 'Account_Master_Plan':
@@ -255,12 +231,8 @@ def process_single(msisdn: str, activated_date: str = None, order_ban: str = Non
                     No_of_Active_inst += 1
                 device_plans.append(cp)
 
-        # ── Pick best device using smart selection ────────────────────────
-        Child_plan1        = 'N/A'
-        child_plan1_name   = 'N/A'
-        child_plan1_status = 'N/A'
-        child_start_date   = 'N/A'
-        child_end_date     = 'N/A'
+        Child_plan1 = child_plan1_name = child_plan1_status = 'N/A'
+        child_start_date = child_end_date = 'N/A'
 
         if device_plans:
             best               = _select_best_device(device_plans)
@@ -271,6 +243,7 @@ def process_single(msisdn: str, activated_date: str = None, order_ban: str = Non
             child_end_date     = ('Not Applicable' if child_plan1_status == 'Active'
                                   else best.get('plan_instance_status_date'))
 
+        # Account status from this plan's own BAN-CAN
         acct_result       = acct_statusfn(user_id)
         account_status_cd = acct_result['status_cd']
         account_status    = 'Active' if account_status_cd == 1 else ('Archived' if account_status_cd == -99 else 'Deactivated')
@@ -307,74 +280,10 @@ def process_single(msisdn: str, activated_date: str = None, order_ban: str = Non
                     if plan_status_date_check > datetime.now() - timedelta(days=5):
                         possible_reactivation = True
             else:
-                # Manual run fallback — plan became active within last 3 days
                 if plan_status_date_check > datetime.now() - timedelta(days=3):
                     possible_reactivation = True
 
-
-        # ── If reactivation detected — no further checks needed ───────────
-        if possible_reactivation:
-            return {
-                "msisdn":                   msisdn,
-                "order_ban":                order_ban,
-                "ban_can":                  user_id,
-                "account_status":           account_status,
-                "master_plan_status":       masterplanstatus,
-                "client_plan_instance_id":  client_plan_instance_id,
-                "plan_name":                plan_name,
-                "plan_status":              plan_status_cd,
-                "plan_status_date":         plan_status_date,
-                "child_plan1":              Child_plan1,
-                "child_client_plan1_id":    child_plan1_name,
-                "child_plan1_status":       child_plan1_status,
-                "child_start_date":         child_start_date,
-                "child_end_date":           child_end_date,
-                "inst_string":              String_details,
-                "inst_status":              Installmentstatus,
-                "no_of_inst":               No_of_inst,
-                "no_of_active_inst":        No_of_Active_inst,
-                "nso_exist":                NSOExist,
-                "status_summary":           remark,
-                "field_to_review":          "Possible_reactivation",
-                "validation":               "✅",
-                "error_msg":                None
-            }
-
-        # ── Normal checks (only reached if NOT a reactivation) ────────────
-
-        # Check if child_end_date is older than 3 months
-        child_end_older_3m = False
-        if child_end_date and child_end_date not in ('N/A', 'Not Applicable'):
-            for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
-                try:
-                    child_end_dt       = datetime.strptime(child_end_date, fmt)
-                    child_end_older_3m = child_end_dt < datetime.now() - timedelta(days=90)
-                    break
-                except ValueError:
-                    continue
-
-        # Exemption: Blank instalment + NSO Not Required + Cancelled device older than 3 months
-        exempt_blank_inst = (
-            Installmentstatus == 'Blank'
-            and NSOExist == 'NSO Not Required'
-            and child_plan1_status == 'Cancelled'
-            and child_end_older_3m
-        )
-
-        if plan_status_cd != 'Cancelled':
-            reviewfield.append('Plan_Status')
-        if child_plan1_status == 'Active':
-            reviewfield.append('Device_Status')
-        if Installmentstatus in ('Blank', 'Active', 'active') and not exempt_blank_inst:
-            reviewfield.append('Installment_Status')
-        if NSOExist not in ('N/A', 'Yes', 'NSO Not Required'):
-            reviewfield.append('NSO')
-        if len(reviewfield) == 0:
-            reviewfield.append('No_Action_Required')
-
-        validation = '✅' if 'No_Action_Required' in reviewfield else '⚠️'
-
-        return {
+        base_result = {
             "msisdn":                   msisdn,
             "order_ban":                order_ban,
             "ban_can":                  user_id,
@@ -395,24 +304,84 @@ def process_single(msisdn: str, activated_date: str = None, order_ban: str = Non
             "no_of_active_inst":        No_of_Active_inst,
             "nso_exist":                NSOExist,
             "status_summary":           remark,
-            "field_to_review":          '|'.join(reviewfield),
-            "validation":               validation,
-            "error_msg":                None
+            "error_msg":                None,
         }
 
+        if possible_reactivation:
+            return {**base_result, "field_to_review": "Possible_reactivation", "validation": "⚠️"}
+
+        # ── Normal flag checks ────────────────────────────────────────────
+
+        child_end_older_3m = False
+        if child_end_date and child_end_date not in ('N/A', 'Not Applicable'):
+            for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+                try:
+                    child_end_dt       = datetime.strptime(child_end_date, fmt)
+                    child_end_older_3m = child_end_dt < datetime.now() - timedelta(days=90)
+                    break
+                except ValueError:
+                    continue
+
+        exempt_blank_inst = (
+            Installmentstatus == 'Blank'
+            and NSOExist == 'NSO Not Required'
+            and child_plan1_status == 'Cancelled'
+            and child_end_older_3m
+        )
+
+        if plan_status_cd != 'Cancelled':
+            reviewfield.append('Plan_Status')
+        if child_plan1_status == 'Active':
+            reviewfield.append('Device_Status')
+        if Installmentstatus in ('Blank', 'Active', 'active') and not exempt_blank_inst:
+            reviewfield.append('Installment_Status')
+        if NSOExist not in ('N/A', 'Yes', 'NSO Not Required'):
+            reviewfield.append('NSO')
+        if not reviewfield:
+            reviewfield.append('No_Action_Required')
+
+        validation = '✅' if 'No_Action_Required' in reviewfield else '⚠️'
+        return {**base_result, "field_to_review": '|'.join(reviewfield), "validation": validation}
+
     except Exception as e:
-        return {"msisdn": msisdn, "order_ban": order_ban, "error_msg": str(e)}
+        return {
+            "msisdn":                  msisdn,
+            "order_ban":               order_ban,
+            "ban_can":                 plan.get('user_id'),
+            "client_plan_instance_id": plan.get('client_plan_instance_id'),
+            "plan_name":               plan.get('plan_name'),
+            "error_msg":               str(e),
+        }
+
+
+def process_single(msisdn: str, activated_date: str = None, order_ban: str = None) -> list[dict]:
+    """Process one MSISDN — returns one result dict per plan instance found in Aria."""
+    try:
+        plan_details = plan_detailsfn(msisdn)
+
+        if plan_details.get('error_msg') != 'OK' or plan_details.get('total_records', 0) == 0:
+            error = plan_details.get('error_msg', 'No Data Found')
+            return [{"msisdn": msisdn, "order_ban": order_ban, "error_msg": error}]
+
+        results = []
+        for plan in plan_details['plan_instance_details']:
+            results.append(_validate_plan_instance(msisdn, plan, activated_date, order_ban))
+
+        return results
+
+    except Exception as e:
+        return [{"msisdn": msisdn, "order_ban": order_ban, "error_msg": str(e)}]
 
 
 def run_validation(msisdn_list: list[str], max_workers: int = 3) -> list[dict]:
-    """Run validation for a list of MSISDNs concurrently."""
+    """Run validation for a list of MSISDNs concurrently. Returns one dict per plan instance."""
     results = []
     lock = threading.Lock()
 
     def process_and_collect(msisdn):
-        result = process_single(msisdn)
+        plan_results = process_single(msisdn)  # list[dict]
         with lock:
-            results.append(result)
+            results.extend(plan_results)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         list(executor.map(process_and_collect, msisdn_list))

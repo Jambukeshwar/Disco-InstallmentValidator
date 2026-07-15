@@ -725,20 +725,24 @@ def _insert_sf_asset_result(conn, run_id: int, r: dict):
 
 def _process_and_store(run_id: int, msisdn: str, counters: dict, lock, order_ban: str = None, order_reason: str = None, activated_date: str = None) -> None:
     from aria_validator import process_single as aria_single
-    aria_r = aria_single(msisdn, activated_date=activated_date, order_ban=order_ban)
-    mtx_r  = matrixx_validator.process_single(msisdn, order_ban=order_ban)
-    sf_r   = sf_asset_validator.process_single(msisdn, order_ban=order_ban, order_reason=order_reason)
+    aria_results = aria_single(msisdn, activated_date=activated_date, order_ban=order_ban)  # list[dict]
+    mtx_r        = matrixx_validator.process_single(msisdn, order_ban=order_ban)
+    sf_r         = sf_asset_validator.process_single(msisdn, order_ban=order_ban, order_reason=order_reason)
 
     conn = get_connection()
     try:
-        _insert_result(conn, run_id, aria_r)
+        # One Aria row per plan instance found for this MSISDN
+        for aria_r in aria_results:
+            _insert_result(conn, run_id, aria_r)
+
         _insert_matrixx_result(conn, run_id, mtx_r)
         _insert_sf_asset_result(conn, run_id, sf_r)
 
+        # Counter at MSISDN level — worst status across all plan instances
         with lock:
-            if aria_r.get("error_msg"):
+            if any(r.get("error_msg") for r in aria_results):
                 counters["errors"] += 1
-            elif aria_r.get("validation") == "⚠️":
+            elif any(r.get("validation") == "⚠️" for r in aria_results):
                 counters["warns"] += 1
             else:
                 counters["success"] += 1
