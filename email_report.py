@@ -26,10 +26,20 @@ SMTP_SUBJECT_PREFIX = os.getenv("SMTP_SUBJECT_PREFIX", "Disconnect Validation Su
 
 
 def build_html_body(date_label: str, aria_list: list, mtx_list: list, sf_list: list) -> str:
-    total = len(aria_list)
-    clean = sum(1 for r in aria_list if r.get("validation") == "✅")
-    warn  = sum(1 for r in aria_list if r.get("validation") == "⚠️")
-    err   = sum(1 for r in aria_list if r.get("validation") not in ("✅", "⚠️") and r.get("validation"))
+    records = len(aria_list)
+
+    # Group plan instances by MSISDN for MSISDN-level summary
+    from collections import defaultdict
+    msisdn_plans = defaultdict(list)
+    for r in aria_list:
+        msisdn_plans[r.get("msisdn")].append(r)
+
+    total = len(msisdn_plans)  # unique MSISDNs
+    # MSISDN is clean only if ALL its plan instances are ✅
+    clean = sum(1 for plans in msisdn_plans.values() if all(p.get("validation") == "✅" for p in plans))
+    # MSISDN needs action if ANY plan instance is ⚠️
+    warn  = sum(1 for plans in msisdn_plans.values() if any(p.get("validation") == "⚠️" for p in plans))
+    err   = sum(1 for plans in msisdn_plans.values() if any(p.get("validation") not in ("✅", "⚠️") and p.get("validation") for p in plans))
 
     systems = [
         ("🔵 Aria",     aria_list, "validation"),
@@ -94,30 +104,37 @@ def build_html_body(date_label: str, aria_list: list, mtx_list: list, sf_list: l
           <div style="font-size:11px;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:14px">Overall Summary</div>
           <table width="100%" cellpadding="0" cellspacing="4">
             <tr>
-              <td width="24%" style="text-align:center;padding:2px">
+              <td width="19%" style="text-align:center;padding:2px">
                 <div style="background:#1c2128;border-radius:10px;padding:18px 8px;border:1px solid #30363d">
-                  <div style="font-size:32px;font-weight:800;color:#58a6ff;line-height:1">{total}</div>
-                  <div style="font-size:10px;color:#8b949e;margin-top:6px;text-transform:uppercase;letter-spacing:1px">Total</div>
+                  <div style="font-size:28px;font-weight:800;color:#58a6ff;line-height:1">{total}</div>
+                  <div style="font-size:10px;color:#8b949e;margin-top:6px;text-transform:uppercase;letter-spacing:1px">MSISDNs</div>
                 </div>
               </td>
               <td width="1%"></td>
-              <td width="24%" style="text-align:center;padding:2px">
+              <td width="19%" style="text-align:center;padding:2px">
                 <div style="background:#1c2128;border-radius:10px;padding:18px 8px;border:1px solid #30363d">
-                  <div style="font-size:32px;font-weight:800;color:#4caf50;line-height:1">{clean}</div>
+                  <div style="font-size:28px;font-weight:800;color:#8b949e;line-height:1">{records}</div>
+                  <div style="font-size:10px;color:#8b949e;margin-top:6px;text-transform:uppercase;letter-spacing:1px">Records</div>
+                </div>
+              </td>
+              <td width="1%"></td>
+              <td width="19%" style="text-align:center;padding:2px">
+                <div style="background:#1c2128;border-radius:10px;padding:18px 8px;border:1px solid #30363d">
+                  <div style="font-size:28px;font-weight:800;color:#4caf50;line-height:1">{clean}</div>
                   <div style="font-size:10px;color:#8b949e;margin-top:6px;text-transform:uppercase;letter-spacing:1px">Clean ✅</div>
                 </div>
               </td>
               <td width="1%"></td>
-              <td width="24%" style="text-align:center;padding:2px">
+              <td width="19%" style="text-align:center;padding:2px">
                 <div style="background:#1c2128;border-radius:10px;padding:18px 8px;border:1px solid #30363d">
-                  <div style="font-size:32px;font-weight:800;color:#ffaa00;line-height:1">{warn}</div>
+                  <div style="font-size:28px;font-weight:800;color:#ffaa00;line-height:1">{warn}</div>
                   <div style="font-size:10px;color:#8b949e;margin-top:6px;text-transform:uppercase;letter-spacing:1px">Action Needed ⚠️</div>
                 </div>
               </td>
               <td width="1%"></td>
-              <td width="24%" style="text-align:center;padding:2px">
+              <td width="19%" style="text-align:center;padding:2px">
                 <div style="background:#1c2128;border-radius:10px;padding:18px 8px;border:1px solid #30363d">
-                  <div style="font-size:32px;font-weight:800;color:#f44336;line-height:1">{err}</div>
+                  <div style="font-size:28px;font-weight:800;color:#f44336;line-height:1">{err}</div>
                   <div style="font-size:10px;color:#8b949e;margin-top:6px;text-transform:uppercase;letter-spacing:1px">Errors ❌</div>
                 </div>
               </td>

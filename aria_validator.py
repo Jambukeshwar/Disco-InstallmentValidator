@@ -308,7 +308,7 @@ def _validate_plan_instance(msisdn: str, plan: dict, activated_date: str = None,
         }
 
         if possible_reactivation:
-            return {**base_result, "field_to_review": "Possible_reactivation", "validation": "⚠️"}
+            return {**base_result, "field_to_review": "Possible_reactivation", "validation": "✅"}
 
         # ── Normal flag checks ────────────────────────────────────────────
 
