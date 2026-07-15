@@ -46,7 +46,7 @@ def build_html_body(date_label: str, aria_list: list, mtx_list: list, sf_list: l
         for r in lst:
             for f in (r.get(key) or "").split("|"):
                 f = f.strip()
-                if f and f != "No_Action_Required":
+                if f and f not in ("No_Action_Required", "BANCAN_Mismatch"):
                     flag_counter[f] += 1
 
     # Per-system rows
