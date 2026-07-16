@@ -723,9 +723,9 @@ def _insert_sf_asset_result(conn, run_id: int, r: dict):
     ))
 
 
-def _process_and_store(run_id: int, msisdn: str, counters: dict, lock, order_ban: str = None, order_reason: str = None, activated_date: str = None) -> None:
+def _process_and_store(run_id: int, msisdn: str, counters: dict, lock, order_ban: str = None, order_reason: str = None, activated_date: str = None, oli_id: str = None) -> None:
     from aria_validator import process_single as aria_single
-    aria_results = aria_single(msisdn, activated_date=activated_date, order_ban=order_ban)  # list[dict]
+    aria_results = aria_single(msisdn, activated_date=activated_date, order_ban=order_ban, oli_id=oli_id)  # list[dict]
     mtx_r        = matrixx_validator.process_single(msisdn, order_ban=order_ban)
     sf_r         = sf_asset_validator.process_single(msisdn, order_ban=order_ban, order_reason=order_reason)
 
@@ -773,7 +773,8 @@ def _run_concurrent(run_id: int, msisdn_list: list, max_workers: int = 3, order_
                 _process_and_store, run_id, msisdn, counters, lock,
                 meta.get(msisdn, {}).get("ban"),
                 meta.get(msisdn, {}).get("reason"),
-                meta.get(msisdn, {}).get("activated_date")
+                meta.get(msisdn, {}).get("activated_date"),
+                meta.get(msisdn, {}).get("oli_id")
             ): msisdn
             for msisdn in msisdn_list
         }
@@ -804,7 +805,8 @@ def do_run(run_id: int, date_from: str, time_from: str, date_to: str, time_to: s
                 order          = r.get("order") or {}
                 reason         = order.get("vlocity_cmt__Reason__c") if isinstance(order, dict) else None
                 activated_date = order.get("ActivatedDate") if isinstance(order, dict) else None
-                order_meta[m]  = {"ban": ban, "reason": reason, "activated_date": activated_date}
+                oli_id         = r.get("PR_Original_OLI_ID__c")
+                order_meta[m]  = {"ban": ban, "reason": reason, "activated_date": activated_date, "oli_id": oli_id}
 
         msisdn_list = list(order_meta.keys())
         conn.execute("UPDATE runs SET total_count = ? WHERE id = ?", (len(msisdn_list), run_id))

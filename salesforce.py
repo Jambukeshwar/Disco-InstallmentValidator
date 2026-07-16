@@ -137,7 +137,8 @@ def run_soql(date_from: str, time_from: str, date_to: str, time_to: str) -> list
                vlocity_cmt__BillingAccountId__r.PR_Mobile_Billing_Number__c,
                product2.name, vlocity_cmt__Action__c,
                order.vlocity_cmt__Reason__c, CreatedDate, order.ActivatedDate,
-               order.vlocity_cmt__OrderStatus__c, order.type, order.Account.name
+               order.vlocity_cmt__OrderStatus__c, order.type, order.Account.name,
+               PR_Original_OLI_ID__c
         FROM orderitem
         WHERE PR_MSISDN__c != null
           AND product2.name != 'SIM Card'

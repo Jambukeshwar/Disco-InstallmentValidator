@@ -354,8 +354,38 @@ def _validate_plan_instance(msisdn: str, plan: dict, activated_date: str = None,
         }
 
 
-def process_single(msisdn: str, activated_date: str = None, order_ban: str = None) -> list[dict]:
-    """Process one MSISDN — returns one result dict per plan instance found in Aria."""
+def _oli_not_matched_result(msisdn: str, plan: dict, order_ban: str, flag: str) -> dict:
+    """Lightweight result for unmatched plans — no further API calls, data from plan_detailsfn response."""
+    status_cd = plan.get('status_cd')
+    return {
+        "msisdn":                  msisdn,
+        "order_ban":               order_ban,
+        "ban_can":                 plan.get('user_id'),
+        "account_status":          'N/A',
+        "master_plan_status":      'N/A',
+        "client_plan_instance_id": plan.get('client_plan_instance_id'),
+        "plan_name":               plan.get('plan_name'),
+        "plan_status":             'Active' if status_cd == 1 else 'Cancelled',
+        "plan_status_date":        plan.get('status_date'),
+        "child_plan1":             'N/A',
+        "child_client_plan1_id":   'N/A',
+        "child_plan1_status":      'N/A',
+        "child_start_date":        'N/A',
+        "child_end_date":          'N/A',
+        "inst_string":             'N/A',
+        "inst_status":             'N/A',
+        "no_of_inst":              0,
+        "no_of_active_inst":       0,
+        "nso_exist":               'N/A',
+        "status_summary":          f'OLI not matched — manual check required',
+        "field_to_review":         flag,
+        "validation":              "⚠️",
+        "error_msg":               None,
+    }
+
+
+def process_single(msisdn: str, activated_date: str = None, order_ban: str = None, oli_id: str = None) -> list[dict]:
+    """Process one MSISDN — OLI ID used to identify the exact plan to validate when multiple exist."""
     try:
         plan_details = plan_detailsfn(msisdn)
 
@@ -363,23 +393,64 @@ def process_single(msisdn: str, activated_date: str = None, order_ban: str = Non
             error = plan_details.get('error_msg', 'No Data Found')
             return [{"msisdn": msisdn, "order_ban": order_ban, "error_msg": error}]
 
-        results = []
-        for plan in plan_details['plan_instance_details']:
-            results.append(_validate_plan_instance(msisdn, plan, activated_date, order_ban))
+        plans = plan_details['plan_instance_details']
 
-        return results
+        # ── Scenario 1: only one plan — validate normally ─────────────────
+        if len(plans) == 1:
+            return [_validate_plan_instance(msisdn, plans[0], activated_date, order_ban)]
+
+        # ── Manual run (no OLI) — validate all active plans ─────────────
+        if not oli_id:
+            active_plans = [p for p in plans if p.get('status_cd') == 1]
+            if active_plans:
+                return [_validate_plan_instance(msisdn, p, activated_date, order_ban)
+                        for p in active_plans]
+            # No active plans — validate most recent cancelled
+            most_recent = max(plans, key=lambda p: _parse_date(p.get('status_date')))
+            return [_validate_plan_instance(msisdn, most_recent, activated_date, order_ban)]
+
+        # ── SF Run — use OLI ID to find the right plan ───────────────────
+        matched   = [p for p in plans if str(p.get('client_plan_instance_id', '')) == str(oli_id)]
+        unmatched = [p for p in plans if str(p.get('client_plan_instance_id', '')) != str(oli_id)]
+
+        active_unmatched    = [p for p in unmatched if p.get('status_cd') == 1]
+
+        # ── Scenario 2: OLI matched a plan ───────────────────────────────
+        if matched:
+            results = [_validate_plan_instance(msisdn, matched[0], activated_date, order_ban)]
+            # Active unmatched plans — flag for manual check
+            for p in active_unmatched:
+                results.append(_oli_not_matched_result(msisdn, p, order_ban, "OLI_Not_Matched_Plan_Active"))
+            # Cancelled unmatched — silently ignored
+            return results
+
+        # ── Scenario 3: no OLI match, some plans still Active ────────────
+        if active_unmatched:
+            return [_oli_not_matched_result(msisdn, p, order_ban, "OLI_Not_Matched")
+                    for p in active_unmatched]
+
+        # ── Scenario 4: no OLI match, all Cancelled — return most recent ─
+        most_recent = max(plans, key=lambda p: _parse_date(p.get('status_date')))
+        return [_oli_not_matched_result(msisdn, most_recent, order_ban, "OLI_Not_Matched")]
 
     except Exception as e:
         return [{"msisdn": msisdn, "order_ban": order_ban, "error_msg": str(e)}]
 
 
-def run_validation(msisdn_list: list[str], max_workers: int = 3) -> list[dict]:
+def run_validation(msisdn_list: list[str], max_workers: int = 3, order_meta: dict = None) -> list[dict]:
     """Run validation for a list of MSISDNs concurrently. Returns one dict per plan instance."""
     results = []
     lock = threading.Lock()
+    meta = order_meta or {}
 
     def process_and_collect(msisdn):
-        plan_results = process_single(msisdn)  # list[dict]
+        m = meta.get(msisdn, {})
+        plan_results = process_single(
+            msisdn,
+            activated_date=m.get("activated_date"),
+            order_ban=m.get("ban"),
+            oli_id=m.get("oli_id")
+        )
         with lock:
             results.extend(plan_results)
 
