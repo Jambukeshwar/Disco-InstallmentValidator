@@ -171,6 +171,16 @@ def nsodetails(child_plan1_name, user_id, string_details, msisdn):
     }
 
 
+def _is_legacy_plan(plan: dict) -> bool:
+    """Return True for old-format plans to be ignored.
+    Legacy: user_id is pure digits (e.g. '465861') or client_plan_instance_id is pure digits (e.g. '1817916').
+    Valid: user_id contains a hyphen (e.g. '21110935-20110931') AND instance_id contains letters (e.g. '8024X00000CBdKzQAL').
+    """
+    user_id     = str(plan.get('user_id', ''))
+    instance_id = str(plan.get('client_plan_instance_id', ''))
+    return '-' not in user_id or instance_id.isdigit()
+
+
 def _parse_date(date_str):
     """Safely parse a date string into a datetime object."""
     if not date_str:
@@ -393,7 +403,10 @@ def process_single(msisdn: str, activated_date: str = None, order_ban: str = Non
             error = plan_details.get('error_msg', 'No Data Found')
             return [{"msisdn": msisdn, "order_ban": order_ban, "error_msg": error}]
 
-        plans = plan_details['plan_instance_details']
+        plans = [p for p in plan_details['plan_instance_details'] if not _is_legacy_plan(p)]
+
+        if not plans:
+            return [{"msisdn": msisdn, "order_ban": order_ban, "error_msg": "No valid plan instances found (all legacy format)"}]
 
         # ── Scenario 1: only one plan — validate normally ─────────────────
         if len(plans) == 1:
