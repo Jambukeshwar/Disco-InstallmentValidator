@@ -135,6 +135,13 @@ def process_single(msisdn: str, order_ban: str = None) -> dict:
 
         # Validation
         review = []
+        # BAN-CAN cross-check first — skip validation entirely if mismatched
+        if order_ban and base["mtx_ban_can"] and base["mtx_ban_can"] != "N/A":
+            if str(order_ban).strip() != str(base["mtx_ban_can"]).strip():
+                base["mtx_field_to_review"] = "No_Action_Required"
+                base["mtx_validation"]      = "✅"
+                return base
+
         sub_status    = (base["mtx_subscription_status"] or "").lower()
         plan_status   = (base["mtx_plan_status"] or "").lower()
         device_status = (base["mtx_device_status"] or "").lower()
@@ -145,11 +152,6 @@ def process_single(msisdn: str, order_ban: str = None) -> dict:
             review.append("Plan_Active")
         if device_status == "active":
             review.append("Device_Active")
-
-        # BAN-CAN cross-check — only for SF runs (order_ban provided)
-        if order_ban and base["mtx_ban_can"] and base["mtx_ban_can"] != "N/A":
-            if str(order_ban).strip() != str(base["mtx_ban_can"]).strip():
-                review.append("BANCAN_Mismatch")
 
         if not review:
             review.append("No_Action_Required")

@@ -137,16 +137,18 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
 
         review = []
 
+        # BAN-CAN cross-check first — skip validation entirely if mismatched
+        if order_ban and sf_ban != "N/A":
+            if str(order_ban).strip() != str(sf_ban).strip():
+                base["sf_field_to_review"] = "No_Action_Required"
+                base["sf_validation"]      = "✅"
+                return base
+
         # 1. Provisioning status check
         if sf_status.lower() not in CLEAN_STATUSES:
             review.append("Provisioning_Not_Disconnected")
 
-        # 2. BAN-CAN cross-check
-        if order_ban and sf_ban != "N/A":
-            if str(order_ban).strip() != str(sf_ban).strip():
-                review.append("BANCAN_Mismatch")
-
-        # 3. Disconnection reason cross-check
+        # 2. Disconnection reason cross-check
         if order_reason and sf_reason != "N/A":
             if str(order_reason).strip().lower() != str(sf_reason).strip().lower():
                 review.append("Reason_Not_Matched")
