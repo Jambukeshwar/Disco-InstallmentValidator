@@ -138,7 +138,7 @@ def process_single(msisdn: str, order_ban: str = None) -> dict:
         # BAN-CAN cross-check first — skip validation entirely if mismatched
         if order_ban and base["mtx_ban_can"] and base["mtx_ban_can"] != "N/A":
             if str(order_ban).strip() != str(base["mtx_ban_can"]).strip():
-                base["mtx_field_to_review"] = "No_Action_Required"
+                base["mtx_field_to_review"] = "BANCAN_Mismatch"
                 base["mtx_validation"]      = "✅"
                 return base
 

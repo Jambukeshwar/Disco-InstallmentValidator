@@ -140,7 +140,7 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
         # BAN-CAN cross-check first — skip validation entirely if mismatched
         if order_ban and sf_ban != "N/A":
             if str(order_ban).strip() != str(sf_ban).strip():
-                base["sf_field_to_review"] = "No_Action_Required"
+                base["sf_field_to_review"] = "BANCAN_Mismatch"
                 base["sf_validation"]      = "✅"
                 return base
 
