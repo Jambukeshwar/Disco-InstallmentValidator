@@ -364,7 +364,26 @@ def _validate_plan_instance(msisdn: str, plan: dict, activated_date: str = None,
         }
 
 
-def _oli_not_matched_result(msisdn: str, plan: dict, order_ban: str, flag: str) -> dict:
+def _is_active_after_order(plan: dict, activated_date: str) -> bool:
+    """Return True if plan's status_date is after the order's activated_date (reactivation indicator)."""
+    if not activated_date:
+        return False
+    try:
+        from datetime import timezone as tz
+        act_dt = datetime.strptime(
+            activated_date.replace('+0000', '+00:00'),
+            "%Y-%m-%dT%H:%M:%S.%f%z"
+        ) if '.' in activated_date else datetime.strptime(
+            activated_date.replace('+0000', '+00:00'),
+            "%Y-%m-%dT%H:%M:%S%z"
+        )
+        plan_dt = _parse_date(plan.get('status_date')).replace(tzinfo=tz(timedelta(hours=-5)))
+        return plan_dt > act_dt
+    except Exception:
+        return False
+
+
+def _oli_not_matched_result(msisdn: str, plan: dict, order_ban: str, flag: str, validation: str = "⚠️") -> dict:
     """Lightweight result for unmatched plans — no further API calls, data from plan_detailsfn response."""
     status_cd = plan.get('status_cd')
     return {
@@ -387,9 +406,9 @@ def _oli_not_matched_result(msisdn: str, plan: dict, order_ban: str, flag: str) 
         "no_of_inst":              0,
         "no_of_active_inst":       0,
         "nso_exist":               'N/A',
-        "status_summary":          f'OLI not matched — manual check required',
+        "status_summary":          'OLI not matched — manual check required',
         "field_to_review":         flag,
-        "validation":              "⚠️",
+        "validation":              validation,
         "error_msg":               None,
     }
 
@@ -431,20 +450,29 @@ def process_single(msisdn: str, activated_date: str = None, order_ban: str = Non
         # ── Scenario 2: OLI matched a plan ───────────────────────────────
         if matched:
             results = [_validate_plan_instance(msisdn, matched[0], activated_date, order_ban)]
-            # Active unmatched plans — flag for manual check
             for p in active_unmatched:
-                results.append(_oli_not_matched_result(msisdn, p, order_ban, "OLI_Not_Matched_Plan_Active"))
-            # Cancelled unmatched — silently ignored
+                if _is_active_after_order(p, activated_date):
+                    results.append(_oli_not_matched_result(msisdn, p, order_ban, "Possible_reactivation", "✅"))
+                else:
+                    results.append(_oli_not_matched_result(msisdn, p, order_ban, "OLI_Not_Matched_Plan_Active"))
             return results
 
         # ── Scenario 3: no OLI match, some plans still Active ────────────
         if active_unmatched:
-            return [_oli_not_matched_result(msisdn, p, order_ban, "OLI_Not_Matched")
-                    for p in active_unmatched]
+            results = []
+            for p in active_unmatched:
+                if _is_active_after_order(p, activated_date):
+                    results.append(_oli_not_matched_result(msisdn, p, order_ban, "Possible_reactivation", "✅"))
+                else:
+                    results.append(_oli_not_matched_result(msisdn, p, order_ban, "OLI_Not_Matched"))
+            return results
 
-        # ── Scenario 4: no OLI match, all Cancelled — return most recent ─
+        # ── Scenario 4: no OLI match, all Cancelled — full validation + OLI_Mismatch flag ─
         most_recent = max(plans, key=lambda p: _parse_date(p.get('status_date')))
-        return [_oli_not_matched_result(msisdn, most_recent, order_ban, "OLI_Not_Matched")]
+        result = _validate_plan_instance(msisdn, most_recent, activated_date, order_ban)
+        existing = result.get('field_to_review', 'No_Action_Required')
+        result['field_to_review'] = 'OLI_Mismatch' if existing == 'No_Action_Required' else f'OLI_Mismatch|{existing}'
+        return [result]
 
     except Exception as e:
         return [{"msisdn": msisdn, "order_ban": order_ban, "error_msg": str(e)}]
