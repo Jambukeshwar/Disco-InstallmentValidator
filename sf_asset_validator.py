@@ -144,14 +144,9 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
                 base["sf_validation"]      = "✅"
                 return base
 
-        # 1. Provisioning status check
+        # Provisioning status check
         if sf_status.lower() not in CLEAN_STATUSES:
             review.append("Provisioning_Not_Disconnected")
-
-        # 2. Disconnection reason cross-check
-        if order_reason and sf_reason != "N/A":
-            if str(order_reason).strip().lower() != str(sf_reason).strip().lower():
-                review.append("Reason_Not_Matched")
 
         if not review:
             review.append("No_Action_Required")
