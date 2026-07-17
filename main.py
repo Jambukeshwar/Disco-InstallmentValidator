@@ -802,7 +802,7 @@ def do_run(run_id: int, date_from: str, time_from: str, date_to: str, time_to: s
             if m:
                 billing        = r.get("vlocity_cmt__BillingAccountId__r") or {}
                 ban            = billing.get("PR_Mobile_Billing_Number__c") if isinstance(billing, dict) else None
-                order          = r.get("order") or {}
+                order          = r.get("Order") or r.get("order") or {}
                 reason         = order.get("vlocity_cmt__Reason__c") if isinstance(order, dict) else None
                 activated_date = order.get("ActivatedDate") if isinstance(order, dict) else None
                 oli_id         = r.get("PR_Original_OLI_ID__c")
