@@ -635,26 +635,41 @@ def generate_suggestion(aria_fields: str, mtx_fields: str) -> str:
 
 # ── Runs ───────────────────────────────────────────────────────────────────────
 
-def trim_old_runs(conn, keep: int = 8):
-    old = conn.execute(
-        "SELECT id FROM runs ORDER BY triggered_at DESC LIMIT -1 OFFSET ?", (keep,)
-    ).fetchall()
-    for row in old:
-        conn.execute("DELETE FROM results WHERE run_id = ?", (row["id"],))
-        conn.execute("DELETE FROM matrixx_results WHERE run_id = ?", (row["id"],))
-        conn.execute("DELETE FROM sf_asset_results WHERE run_id = ?", (row["id"],))
-        conn.execute("DELETE FROM runs WHERE id = ?", (row["id"],))
-    if old:
-        conn.commit()
+def trim_old_runs(conn, keep_agent: int = 10, keep_other: int = 10):
+    for source_filter, keep in [("agent", keep_agent), ("non-agent", keep_other)]:
+        if source_filter == "agent":
+            old = conn.execute(
+                "SELECT id FROM runs WHERE source='agent' ORDER BY triggered_at DESC LIMIT -1 OFFSET ?",
+                (keep,)
+            ).fetchall()
+        else:
+            old = conn.execute(
+                "SELECT id FROM runs WHERE source != 'agent' ORDER BY triggered_at DESC LIMIT -1 OFFSET ?",
+                (keep,)
+            ).fetchall()
+        for row in old:
+            conn.execute("DELETE FROM results WHERE run_id = ?", (row["id"],))
+            conn.execute("DELETE FROM matrixx_results WHERE run_id = ?", (row["id"],))
+            conn.execute("DELETE FROM sf_asset_results WHERE run_id = ?", (row["id"],))
+            conn.execute("DELETE FROM runs WHERE id = ?", (row["id"],))
+    conn.commit()
 
 
-def trim_old_installment_runs(conn, keep: int = 15):
-    old = conn.execute(
-        "SELECT id FROM installment_runs ORDER BY triggered_at DESC LIMIT -1 OFFSET ?", (keep,)
-    ).fetchall()
-    for row in old:
-        conn.execute("DELETE FROM installment_results WHERE run_id=?", (row["id"],))
-        conn.execute("DELETE FROM installment_runs WHERE id=?", (row["id"],))
+def trim_old_installment_runs(conn, keep_agent: int = 10, keep_other: int = 15):
+    for source_filter, keep in [("agent", keep_agent), ("non-agent", keep_other)]:
+        if source_filter == "agent":
+            old = conn.execute(
+                "SELECT id FROM installment_runs WHERE source='agent' ORDER BY triggered_at DESC LIMIT -1 OFFSET ?",
+                (keep,)
+            ).fetchall()
+        else:
+            old = conn.execute(
+                "SELECT id FROM installment_runs WHERE source != 'agent' ORDER BY triggered_at DESC LIMIT -1 OFFSET ?",
+                (keep,)
+            ).fetchall()
+        for row in old:
+            conn.execute("DELETE FROM installment_results WHERE run_id=?", (row["id"],))
+            conn.execute("DELETE FROM installment_runs WHERE id=?", (row["id"],))
     if old:
         conn.commit()
 
@@ -890,8 +905,8 @@ def create_manual_run(req: ManualRunRequest, background_tasks: BackgroundTasks, 
 
     conn = get_connection()
     cur = conn.execute(
-        "INSERT INTO runs (triggered_at, date_from, date_to, status) VALUES (?,?,?,?)",
-        (datetime.now(timezone.utc).isoformat(), "manual", "manual", "running")
+        "INSERT INTO runs (triggered_at, date_from, date_to, status, source) VALUES (?,?,?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), "manual", "manual", "running", "manual")
     )
     run_id = cur.lastrowid
     conn.commit()
@@ -906,8 +921,8 @@ def create_run(req: RunRequest, background_tasks: BackgroundTasks, request: Requ
     require_session(request)
     conn = get_connection()
     cur = conn.execute(
-        "INSERT INTO runs (triggered_at, date_from, time_from, date_to, time_to, status) VALUES (?,?,?,?,?,?)",
-        (datetime.now(timezone.utc).isoformat(), req.date_from, req.time_from, req.date_to, req.time_to, "running")
+        "INSERT INTO runs (triggered_at, date_from, time_from, date_to, time_to, status, source) VALUES (?,?,?,?,?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), req.date_from, req.time_from, req.date_to, req.time_to, "running", "sf")
     )
     run_id = cur.lastrowid
     conn.commit()
@@ -936,7 +951,7 @@ def list_runs(request: Request):
     conn = get_connection()
     rows = conn.execute("""
         SELECT r.*, (SELECT COUNT(*) FROM results WHERE run_id = r.id) AS record_count
-        FROM runs r ORDER BY triggered_at DESC LIMIT 5
+        FROM runs r WHERE r.source != 'agent' ORDER BY triggered_at DESC LIMIT 10
     """).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -1354,8 +1369,9 @@ def matrixx_connect(body: MatrixxKeysRequest, request: Request):
     env["AWS_SECRET_ACCESS_KEY"] = body.aws_secret_access_key
     env["AWS_SESSION_TOKEN"]     = body.aws_session_token
     _portforward_process = subprocess.Popen(
-        ["kubectl", "port-forward", "svc/rsgateway-ag1", "9090:8080", "-n", "matrixx"],
+        "kubectl port-forward svc/rsgateway-ag1 9090:8080 -n matrixx",
         env=env,
+        shell=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
@@ -1630,8 +1646,8 @@ def _scheduled_daily_report():
 
         conn = get_connection()
         cur = conn.execute(
-            "INSERT INTO runs (triggered_at, date_from, time_from, date_to, time_to, status) VALUES (?,?,?,?,?,?)",
-            (datetime.now(timezone.utc).isoformat(), date_from, "00:00", date_to, "23:59", "running")
+            "INSERT INTO runs (triggered_at, date_from, time_from, date_to, time_to, status, source) VALUES (?,?,?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(), date_from, "00:00", date_to, "23:59", "running", "scheduled")
         )
         run_id = cur.lastrowid
         conn.commit()
@@ -1803,8 +1819,8 @@ def _scheduled_installment_report():
         for seg in ("B2C", "B2B", "ChangePlan"):
             conn = get_connection()
             cur  = conn.execute(
-                "INSERT INTO installment_runs (triggered_at,segment,date_from,date_to,status) VALUES (?,?,?,?,?)",
-                (datetime.now(timezone.utc).isoformat(), seg, date_from, date_to, "running"),
+                "INSERT INTO installment_runs (triggered_at,segment,date_from,date_to,status,source) VALUES (?,?,?,?,?,?)",
+                (datetime.now(timezone.utc).isoformat(), seg, date_from, date_to, "running", "scheduled"),
             )
             run_id = cur.lastrowid
             conn.commit(); conn.close()
@@ -2225,8 +2241,8 @@ def start_installment_run(req: InstallmentRunRequest, background_tasks: Backgrou
         raise HTTPException(status_code=400, detail="segment must be B2C, B2B, or ChangePlan")
     conn = get_connection()
     cur  = conn.execute(
-        "INSERT INTO installment_runs (triggered_at, segment, date_from, date_to, status) VALUES (?,?,?,?,?)",
-        (datetime.now(timezone.utc).isoformat(), req.segment, req.date_from, req.date_to, "running"),
+        "INSERT INTO installment_runs (triggered_at, segment, date_from, date_to, status, source) VALUES (?,?,?,?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), req.segment, req.date_from, req.date_to, "running", "manual"),
     )
     run_id = cur.lastrowid
     conn.commit()
@@ -2355,6 +2371,170 @@ def revalidate_pending(request: Request):
     today = _date.today().isoformat()
     threading.Thread(target=_revalidate_all_pending, args=(today,), daemon=True).start()
     return {"status": "triggered"}
+
+
+# ── Agent API endpoints ────────────────────────────────────────────────────────
+
+AGENT_API_KEY = os.getenv("AGENT_API_KEY", "")
+
+
+def _require_api_key(request: Request):
+    key = request.headers.get("X-API-Key", "")
+    if not AGENT_API_KEY or key != AGENT_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+class AgentDisconnectRequest(BaseModel):
+    mode:      str        # "sf" or "manual"
+    date_from: str = ""
+    date_to:   str = ""
+    time_from: str = "00:00"
+    time_to:   str = "23:59"
+    msisdns:   list[str] = []
+
+
+class AgentInstallmentRequest(BaseModel):
+    segment:   str        # "B2C", "B2B", or "ChangePlan"
+    date_from: str
+    date_to:   str
+    time_from: str = "00:00"
+    time_to:   str = "23:59"
+
+
+@app.post("/api/agent/disconnect-validate")
+def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
+    """Agent endpoint — runs disconnect validation and returns combined JSON results."""
+    _require_api_key(request)
+
+    conn = get_connection()
+    if req.mode == "sf":
+        if not req.date_from or not req.date_to:
+            raise HTTPException(status_code=400, detail="date_from and date_to required for sf mode")
+        cur = conn.execute(
+            "INSERT INTO runs (triggered_at, date_from, time_from, date_to, time_to, status, source) VALUES (?,?,?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(), req.date_from, req.time_from, req.date_to, req.time_to, "running", "agent")
+        )
+    elif req.mode == "manual":
+        msisdn_list = list({m.strip() for m in req.msisdns if m.strip()})
+        if not msisdn_list:
+            raise HTTPException(status_code=400, detail="msisdns required for manual mode")
+        cur = conn.execute(
+            "INSERT INTO runs (triggered_at, date_from, date_to, status, source) VALUES (?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(), "manual", "manual", "running", "agent")
+        )
+    else:
+        raise HTTPException(status_code=400, detail="mode must be 'sf' or 'manual'")
+
+    run_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    if req.mode == "sf":
+        do_run(run_id, req.date_from, req.time_from, req.date_to, req.time_to)
+    else:
+        do_manual_run(run_id, msisdn_list)
+
+    conn = get_connection()
+    run  = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    rows = conn.execute("""
+        SELECT r.msisdn, r.order_ban, r.ban_can AS aria_bancan,
+               r.account_status, r.master_plan_status, r.plan_name,
+               r.plan_status, r.child_plan1_status AS device_status,
+               r.inst_status, r.nso_exist, r.field_to_review, r.validation AS aria_validation,
+               m.mtx_ban_can, m.mtx_subscription_status, m.mtx_plan_status,
+               m.mtx_device_status, m.mtx_field_to_review, m.mtx_validation,
+               s.sf_ban_can, s.sf_provisioning, s.sf_disc_reason,
+               s.sf_field_to_review, s.sf_validation
+        FROM results r
+        LEFT JOIN matrixx_results m  ON m.run_id = r.run_id AND m.msisdn = r.msisdn
+        LEFT JOIN sf_asset_results s ON s.run_id = r.run_id AND s.msisdn = r.msisdn
+        WHERE r.run_id = ?
+        ORDER BY r.msisdn
+    """, (run_id,)).fetchall()
+    conn.close()
+
+    results = []
+    for row in rows:
+        r = dict(row)
+        flags = []
+        for src in (r.get("field_to_review"), r.get("mtx_field_to_review"), r.get("sf_field_to_review")):
+            if src:
+                for f in src.split("|"):
+                    f = f.strip()
+                    if f and f != "No_Action_Required" and f not in flags:
+                        flags.append(f)
+        field_to_review = " | ".join(flags) if flags else "No_Action_Required"
+
+        validations = [r.get("aria_validation") or "", r.get("mtx_validation") or "", r.get("sf_validation") or ""]
+        if any("❌" in v for v in validations):
+            overall = "❌"
+        elif any("⚠️" in v for v in validations):
+            overall = "⚠️"
+        else:
+            overall = "✅"
+
+        results.append({
+            "msisdn":                  r.get("msisdn"),
+            "order_bancan":            r.get("order_ban"),
+            "account_status":          r.get("account_status"),
+            "master_plan_status":      r.get("master_plan_status"),
+            "plan_name":               r.get("plan_name"),
+            "plan_status":             r.get("plan_status"),
+            "device_status":           r.get("device_status"),
+            "inst_status":             r.get("inst_status"),
+            "nso_exist":               r.get("nso_exist"),
+            "mtx_subscription_status": r.get("mtx_subscription_status"),
+            "mtx_plan_status":         r.get("mtx_plan_status"),
+            "mtx_device_status":       r.get("mtx_device_status"),
+            "sf_provisioning":         r.get("sf_provisioning"),
+            "sf_disc_reason":          r.get("sf_disc_reason"),
+            "overall":                 overall,
+            "field_to_review":         field_to_review,
+        })
+
+    run_dict = dict(run) if run else {}
+    return {
+        "run_id":  run_id,
+        "status":  run_dict.get("status"),
+        "total":   run_dict.get("total_count", len(results)),
+        "results": results,
+    }
+
+
+@app.post("/api/agent/installment-validate")
+def agent_installment_validate(req: AgentInstallmentRequest, request: Request):
+    """Agent endpoint — runs installment validation and returns JSON results."""
+    _require_api_key(request)
+
+    if req.segment not in ("B2C", "B2B", "ChangePlan"):
+        raise HTTPException(status_code=400, detail="segment must be B2C, B2B, or ChangePlan")
+
+    conn = get_connection()
+    cur  = conn.execute(
+        "INSERT INTO installment_runs (triggered_at, segment, date_from, date_to, status, source) VALUES (?,?,?,?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), req.segment, req.date_from, req.date_to, "running", "agent"),
+    )
+    run_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    do_installment_run(run_id, req.segment, req.date_from, req.date_to, req.time_from, req.time_to)
+
+    conn  = get_connection()
+    run   = conn.execute("SELECT * FROM installment_runs WHERE id=?", (run_id,)).fetchone()
+    rows  = conn.execute(
+        "SELECT * FROM installment_results WHERE run_id=? ORDER BY id", (run_id,)
+    ).fetchall()
+    conn.close()
+
+    run_dict = dict(run) if run else {}
+    return {
+        "run_id":  run_id,
+        "segment": req.segment,
+        "status":  run_dict.get("status"),
+        "total":   run_dict.get("total", len(rows)),
+        "results": [dict(r) for r in rows],
+    }
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

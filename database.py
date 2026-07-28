@@ -37,6 +37,8 @@ def init_db():
         c.execute("ALTER TABLE runs ADD COLUMN time_to TEXT NOT NULL DEFAULT '23:59'")
     if "warn_count" not in existing_runs:
         c.execute("ALTER TABLE runs ADD COLUMN warn_count INTEGER DEFAULT 0")
+    if "source" not in existing_runs:
+        c.execute("ALTER TABLE runs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS results (
@@ -233,6 +235,10 @@ def init_db():
         c.execute("ALTER TABLE installment_results ADD COLUMN device_amount TEXT")
     if "monthly_amount" not in existing_inst_res:
         c.execute("ALTER TABLE installment_results ADD COLUMN monthly_amount TEXT")
+
+    existing_inst_runs = {row[1] for row in c.execute("PRAGMA table_info(installment_runs)")}
+    if "source" not in existing_inst_runs:
+        c.execute("ALTER TABLE installment_runs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS installment_pending (
