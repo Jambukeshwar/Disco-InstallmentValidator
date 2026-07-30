@@ -8,6 +8,7 @@ Authentication module for Disco Validator.
 import os
 import secrets
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 import bcrypt
 
@@ -83,7 +84,7 @@ def change_password(username: str, new_password: str):
 
 # ── Login / logout ─────────────────────────────────────────────────────────────
 
-def verify_login(username: str, password: str) -> str | None:
+def verify_login(username: str, password: str) -> Optional[str]:
     """
     Verify credentials. Returns a session token on success, None on failure.
     """
@@ -120,7 +121,7 @@ def logout(token: str):
 
 # ── Session validation ─────────────────────────────────────────────────────────
 
-def get_session(token: str) -> dict | None:
+def get_session(token: str) -> Optional[dict]:
     """
     Return session dict if valid and not expired.
     Updates last_active on every call (activity reset).
