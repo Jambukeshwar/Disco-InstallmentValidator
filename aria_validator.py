@@ -431,15 +431,10 @@ def process_single(msisdn: str, activated_date: str = None, order_ban: str = Non
         if len(plans) == 1:
             return [_validate_plan_instance(msisdn, plans[0], activated_date, order_ban)]
 
-        # ── Manual run (no OLI) — validate all active plans ─────────────
+        # ── Manual run (no OLI) — validate all plans (active + cancelled) ──
         if not oli_id:
-            active_plans = [p for p in plans if p.get('status_cd') == 1]
-            if active_plans:
-                return [_validate_plan_instance(msisdn, p, activated_date, order_ban)
-                        for p in active_plans]
-            # No active plans — validate most recent cancelled
-            most_recent = max(plans, key=lambda p: _parse_date(p.get('status_date')))
-            return [_validate_plan_instance(msisdn, most_recent, activated_date, order_ban)]
+            return [_validate_plan_instance(msisdn, p, activated_date, order_ban)
+                    for p in plans]
 
         # ── SF Run — use OLI ID to find the right plan ───────────────────
         matched   = [p for p in plans if str(p.get('client_plan_instance_id', '')) == str(oli_id)]
