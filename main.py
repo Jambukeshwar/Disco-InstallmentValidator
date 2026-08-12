@@ -2440,7 +2440,9 @@ def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
         SELECT r.msisdn, r.order_ban, r.ban_can AS aria_bancan,
                r.account_status, r.master_plan_status, r.plan_name,
                r.plan_status, r.plan_status_date, r.child_plan1_status AS device_status,
-               r.inst_status, r.inst_string, r.nso_exist, r.field_to_review, r.validation AS aria_validation,
+               r.inst_status, r.inst_string, r.nso_exist,
+               r.status_summary AS aria_status_summary,
+               r.field_to_review AS aria_field_to_review, r.validation AS aria_validation,
                m.mtx_ban_can, m.mtx_subscription_status, m.mtx_plan_status,
                m.mtx_device_status, m.mtx_field_to_review, m.mtx_validation,
                s.sf_ban_can, s.sf_provisioning, s.sf_disc_reason,
@@ -2457,13 +2459,13 @@ def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
     for row in rows:
         r = dict(row)
         flags = []
-        for src in (r.get("field_to_review"), r.get("mtx_field_to_review"), r.get("sf_field_to_review")):
+        for src in (r.get("aria_field_to_review"), r.get("mtx_field_to_review"), r.get("sf_field_to_review")):
             if src:
                 for f in src.split("|"):
                     f = f.strip()
                     if f and f != "No_Action_Required" and f not in flags:
                         flags.append(f)
-        field_to_review = " | ".join(flags) if flags else "No_Action_Required"
+        combined_field_to_review = " | ".join(flags) if flags else "No_Action_Required"
 
         validations = [r.get("aria_validation") or "", r.get("mtx_validation") or "", r.get("sf_validation") or ""]
         if any("❌" in v for v in validations):
@@ -2474,27 +2476,31 @@ def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
             overall = "✅"
 
         results.append({
-            "msisdn":                  r.get("msisdn"),
-            "order_bancan":            r.get("order_ban"),
-            "aria_ban_can":            r.get("aria_bancan"),
-            "account_status":          r.get("account_status"),
-            "master_plan_status":      r.get("master_plan_status"),
-            "plan_name":               r.get("plan_name"),
-            "plan_status":             r.get("plan_status"),
-            "plan_status_date":        r.get("plan_status_date"),
-            "device_status":           r.get("device_status"),
-            "inst_status":             r.get("inst_status"),
-            "inst_string":             r.get("inst_string"),
-            "nso_exist":               r.get("nso_exist"),
-            "mtx_ban_can":             r.get("mtx_ban_can"),
-            "mtx_subscription_status": r.get("mtx_subscription_status"),
-            "mtx_plan_status":         r.get("mtx_plan_status"),
-            "mtx_device_status":       r.get("mtx_device_status"),
-            "sf_ban_can":              r.get("sf_ban_can"),
-            "sf_provisioning":         r.get("sf_provisioning"),
-            "sf_disc_reason":          r.get("sf_disc_reason"),
-            "overall":                 overall,
-            "field_to_review":         field_to_review,
+            "msisdn":                   r.get("msisdn"),
+            "order_bancan":             r.get("order_ban"),
+            "aria_ban_can":             r.get("aria_bancan"),
+            "account_status":           r.get("account_status"),
+            "master_plan_status":       r.get("master_plan_status"),
+            "plan_name":                r.get("plan_name"),
+            "plan_status":              r.get("plan_status"),
+            "plan_status_date":         r.get("plan_status_date"),
+            "device_status":            r.get("device_status"),
+            "inst_status":              r.get("inst_status"),
+            "inst_string":              r.get("inst_string"),
+            "nso_exist":                r.get("nso_exist"),
+            "aria_status_summary":      r.get("aria_status_summary"),
+            "aria_field_to_review":     r.get("aria_field_to_review"),
+            "mtx_ban_can":              r.get("mtx_ban_can"),
+            "mtx_subscription_status":  r.get("mtx_subscription_status"),
+            "mtx_plan_status":          r.get("mtx_plan_status"),
+            "mtx_device_status":        r.get("mtx_device_status"),
+            "mtx_field_to_review":      r.get("mtx_field_to_review"),
+            "sf_ban_can":               r.get("sf_ban_can"),
+            "sf_provisioning":          r.get("sf_provisioning"),
+            "sf_disc_reason":           r.get("sf_disc_reason"),
+            "sf_field_to_review":       r.get("sf_field_to_review"),
+            "overall":                  overall,
+            "combined_field_to_review": combined_field_to_review,
         })
 
     run_dict = dict(run) if run else {}
