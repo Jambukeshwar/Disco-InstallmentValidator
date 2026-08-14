@@ -2228,17 +2228,26 @@ def do_installment_run(run_id: int, segment: str, date_from: str, date_to: str, 
 
 
 def do_installment_manual_run(run_id: int, order_ids: list):
-    """Fetch SF order line items by Order ID and validate each against Aria."""
+    """Fetch SF order line items by Order ID and validate each against Aria.
+    Handles both plain Add OLIs (process_single) and ChangePlan pairs
+    (process_changeplan_order), including No Commit Retail Price disconnects.
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     conn = get_connection()
     try:
-        # Collect all records across all order IDs
-        records = []
+        # Collect all records and ChangePlan pairs across all order IDs
+        single_records   = []
+        changeplan_pairs = []
         for oid in order_ids:
             raw = run_soql_query(inst_val.build_order_soql(oid.strip()))
-            records.extend(inst_val.parse_order_records(raw))
+            sr, cp = inst_val.parse_order_records(raw)
+            single_records.extend(sr)
+            changeplan_pairs.extend(cp)
 
-        tasks = [(inst_val.process_single, r) for r in records]
+        tasks = (
+            [(inst_val.process_single,           r) for r in single_records] +
+            [(inst_val.process_changeplan_order,  p) for p in changeplan_pairs]
+        )
         total = len(tasks)
         conn.execute("UPDATE installment_runs SET total=? WHERE id=?", (total, run_id))
         conn.commit()
@@ -2487,11 +2496,13 @@ class AgentDisconnectRequest(BaseModel):
 
 
 class AgentInstallmentRequest(BaseModel):
-    segment:   str        # "B2C", "B2B", or "ChangePlan"
-    date_from: str
-    date_to:   str
+    mode:      str = "sf"          # "sf" or "manual"
+    segment:   str = ""            # "B2C", "B2B", "ChangePlan" — required for sf mode
+    date_from: str = ""
+    date_to:   str = ""
     time_from: str = "00:00"
     time_to:   str = "23:59"
+    order_ids: list[str] = []      # required for manual mode
 
 
 @app.post("/api/agent/disconnect-validate")
@@ -2607,22 +2618,44 @@ def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
 
 @app.post("/api/agent/installment-validate")
 def agent_installment_validate(req: AgentInstallmentRequest, request: Request):
-    """Agent endpoint — runs installment validation and returns JSON results."""
+    """Agent endpoint — runs installment validation and returns JSON results.
+    mode='sf'     : date range SF run (segment required)
+    mode='manual' : validate by Order ID list (order_ids required)
+    """
     _require_api_key(request)
 
-    if req.segment not in ("B2C", "B2B", "ChangePlan"):
-        raise HTTPException(status_code=400, detail="segment must be B2C, B2B, or ChangePlan")
-
     conn = get_connection()
-    cur  = conn.execute(
-        "INSERT INTO installment_runs (triggered_at, segment, date_from, date_to, status, source) VALUES (?,?,?,?,?,?)",
-        (datetime.now(timezone.utc).isoformat(), req.segment, req.date_from, req.date_to, "running", "agent"),
-    )
-    run_id = cur.lastrowid
-    conn.commit()
-    conn.close()
 
-    do_installment_run(run_id, req.segment, req.date_from, req.date_to, req.time_from, req.time_to)
+    if req.mode == "manual":
+        order_ids = [o.strip() for o in req.order_ids if o.strip()]
+        if not order_ids:
+            raise HTTPException(status_code=400, detail="order_ids required for manual mode")
+        cur = conn.execute(
+            "INSERT INTO installment_runs (triggered_at, segment, date_from, date_to, status, source) VALUES (?,?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(), "Manual", "manual", "manual", "running", "agent"),
+        )
+        run_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        do_installment_manual_run(run_id, order_ids)
+
+    elif req.mode == "sf":
+        if req.segment not in ("B2C", "B2B", "ChangePlan"):
+            raise HTTPException(status_code=400, detail="segment must be B2C, B2B, or ChangePlan")
+        if not req.date_from or not req.date_to:
+            raise HTTPException(status_code=400, detail="date_from and date_to required for sf mode")
+        cur = conn.execute(
+            "INSERT INTO installment_runs (triggered_at, segment, date_from, date_to, status, source) VALUES (?,?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(), req.segment, req.date_from, req.date_to, "running", "agent"),
+        )
+        run_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        do_installment_run(run_id, req.segment, req.date_from, req.date_to, req.time_from, req.time_to)
+
+    else:
+        conn.close()
+        raise HTTPException(status_code=400, detail="mode must be 'sf' or 'manual'")
 
     conn  = get_connection()
     run   = conn.execute("SELECT * FROM installment_runs WHERE id=?", (run_id,)).fetchone()
@@ -2634,7 +2667,8 @@ def agent_installment_validate(req: AgentInstallmentRequest, request: Request):
     run_dict = dict(run) if run else {}
     return {
         "run_id":  run_id,
-        "segment": req.segment,
+        "mode":    req.mode,
+        "segment": run_dict.get("segment"),
         "status":  run_dict.get("status"),
         "total":   run_dict.get("total", len(rows)),
         "results": [dict(r) for r in rows],

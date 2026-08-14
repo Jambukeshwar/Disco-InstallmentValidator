@@ -76,27 +76,42 @@ def build_changeplan_soql(date_from: str, date_to: str, time_from: str = "00:00"
 
 
 def build_order_soql(order_id: str) -> str:
-    """Fetch all order line items for a given SF Order ID."""
+    """Fetch installment-bearing order line items for a given SF Order ID."""
     return (
-        "SELECT OrderId, order.vlocity_cmt__OrderStatus__c, order.vlocity_cmt__Reason__c, "
-        "vlocity_cmt__ServiceAccountId__c, order.type, PR_Original_OLI_ID__c, "
+        "SELECT OrderId, order.Type, PR_Original_OLI_ID__c, "
         "vlocity_cmt__ServiceAccountId__r.MSISDN__c, "
         "vlocity_cmt__BillingAccountId__r.PR_Mobile_Billing_Number__c, "
-        "product2.name, Contract_Term__c, PRB2C_Installment_ID__c, PRB2B_InstallmentPlanID__c, "
-        "vlocity_cmt__Action__c, vlocity_cmt__BillingAccountId__r.Segment__c "
-        f"FROM orderitem WHERE OrderId = '{order_id}'"
+        "Product2.Name, Contract_Term__c, "
+        "PRB2C_Installment_ID__c, PRB2B_InstallmentPlanID__c, "
+        "vlocity_cmt__Action__c, Order.vlocity_cmt__Reason__c, "
+        "vlocity_cmt__BillingAccountId__r.Segment__c "
+        "FROM OrderItem "
+        "WHERE Product2.vlocity_cmt__ObjectTypeName__c "
+        "IN ('Mobile Phone','Tablet','Accessory','Smart Watch') "
+        f"AND OrderId = '{order_id}'"
     )
 
 
-def parse_order_records(raw_records: list) -> list:
-    """Parse SF records fetched by Order ID — auto-detects segment from Segment__c."""
-    out = []
+def parse_order_records(raw_records: list) -> tuple:
+    """Parse SF records fetched by Order ID.
+
+    Groups by OrderId and detects Disconnect+Add pairs (ChangePlan scenario).
+    Returns (single_records, changeplan_pairs):
+      - single_records   → validated with process_single
+      - changeplan_pairs → validated with process_changeplan_order
+
+    Special case: if the Disconnect row has Contract_Term__c = 'No Commit Retail Price'
+    the old device had no installment in Aria — only the Add OLI is validated via process_single.
+    """
+    from collections import defaultdict
+    orders = defaultdict(list)
     for r in raw_records:
+        order_id      = r.get("OrderId") or r.get("Id")
         segment       = _nested(r, "vlocity_cmt__BillingAccountId__r", "Segment__c") or "B2C"
         inst_id_field = "PRB2C_Installment_ID__c" if segment == "B2C" else "PRB2B_InstallmentPlanID__c"
-        out.append({
+        orders[order_id].append({
             "segment":           segment,
-            "order_id":          r.get("OrderId") or r.get("Id"),
+            "order_id":          order_id,
             "oli_id":            r.get("PR_Original_OLI_ID__c"),
             "sf_bancan":         _nested(r, "vlocity_cmt__BillingAccountId__r", "PR_Mobile_Billing_Number__c"),
             "msisdn":            _nested(r, "vlocity_cmt__ServiceAccountId__r", "MSISDN__c"),
@@ -104,8 +119,28 @@ def parse_order_records(raw_records: list) -> list:
             "order_reason":      _nested(r, "Order", "vlocity_cmt__Reason__c"),
             "contract_term":     r.get("Contract_Term__c"),
             "sf_installment_id": str(r.get(inst_id_field) or "").strip(),
+            "action":            r.get("vlocity_cmt__Action__c", ""),
         })
-    return out
+
+    single_records   = []
+    changeplan_pairs = []
+
+    for recs in orders.values():
+        disc = next((r for r in recs if r["action"] == "Disconnect"), None)
+        add  = next((r for r in recs if r["action"] == "Add"), None)
+
+        if disc and add:
+            if (disc.get("contract_term") or "") == "No Commit Retail Price":
+                # Old device had no installment — validate Add OLI only
+                single_records.append(add)
+            else:
+                # Both have installments — use ChangePlan comparison logic
+                changeplan_pairs.append({"disconnect": disc, "add": add})
+        elif add:
+            single_records.append(add)
+        # Disconnect-only rows are skipped
+
+    return single_records, changeplan_pairs
 
 
 def parse_changeplan_records(raw_records: list) -> list:
