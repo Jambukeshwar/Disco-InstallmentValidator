@@ -2235,24 +2235,49 @@ def do_installment_manual_run(run_id: int, order_ids: list):
     from concurrent.futures import ThreadPoolExecutor, as_completed
     conn = get_connection()
     try:
-        # Collect all records and ChangePlan pairs across all order IDs
+        # Collect all records, ChangePlan pairs, and skipped records across all order IDs
         single_records   = []
         changeplan_pairs = []
+        skipped_records  = []
         for oid in order_ids:
             raw = run_soql_query(inst_val.build_order_soql(oid.strip()))
-            sr, cp = inst_val.parse_order_records(raw)
+            sr, cp, sk = inst_val.parse_order_records(raw)
             single_records.extend(sr)
             changeplan_pairs.extend(cp)
+            skipped_records.extend(sk)
 
         tasks = (
             [(inst_val.process_single,           r) for r in single_records] +
             [(inst_val.process_changeplan_order,  p) for p in changeplan_pairs]
         )
-        total = len(tasks)
+        total = len(tasks) + len(skipped_records)
         conn.execute("UPDATE installment_runs SET total=? WHERE id=?", (total, run_id))
         conn.commit()
 
-        done = clean = mismatch = not_found = 0
+        # Insert skipped records directly — no Aria call needed
+        done = clean = len(skipped_records)
+        for res in skipped_records:
+            conn.execute("""
+                INSERT INTO installment_results
+                (run_id,segment,order_id,oli_id,sf_bancan,msisdn,product_name,order_reason,
+                 contract_term,sf_installment_id,aria_bancan,aria_oli,aria_installment_id,
+                 aria_plan_name,validation,match_status,error,device_amount,monthly_amount)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                run_id, res.get("segment"), res.get("order_id"), res.get("oli_id"),
+                res.get("sf_bancan"), res.get("msisdn"), res.get("product_name"),
+                res.get("order_reason"), res.get("contract_term"), res.get("sf_installment_id"),
+                res.get("aria_bancan"), res.get("aria_oli"), res.get("aria_installment_id"),
+                res.get("aria_plan_name"), res.get("validation"), res.get("match_status"),
+                res.get("error"), res.get("device_amount"), res.get("monthly_amount"),
+            ))
+        conn.execute("UPDATE installment_runs SET done=?,clean=? WHERE id=?",
+                     (len(skipped_records), len(skipped_records), run_id))
+        conn.commit()
+
+        done      = len(skipped_records)
+        mismatch  = 0
+        not_found = 0
 
         with ThreadPoolExecutor(max_workers=3) as ex:
             futures = {ex.submit(fn, item): (fn, item) for fn, item in tasks}

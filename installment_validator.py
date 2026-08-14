@@ -96,12 +96,15 @@ def parse_order_records(raw_records: list) -> tuple:
     """Parse SF records fetched by Order ID.
 
     Groups by OrderId and detects Disconnect+Add pairs (ChangePlan scenario).
-    Returns (single_records, changeplan_pairs):
+    Returns (single_records, changeplan_pairs, skipped_records):
       - single_records   → validated with process_single
       - changeplan_pairs → validated with process_changeplan_order
+      - skipped_records  → pre-built result dicts inserted directly (no Aria call needed)
 
-    Special case: if the Disconnect row has Contract_Term__c = 'No Commit Retail Price'
-    the old device had no installment in Aria — only the Add OLI is validated via process_single.
+    Add OLI installment check:
+      B2B → PRB2B_InstallmentPlanID__c present
+      B2C → Contract_Term__c present and != 'No Commit Retail Price'
+    If Add has no installment → stored as skipped with reason, not silently dropped.
     """
     from collections import defaultdict
     orders = defaultdict(list)
@@ -124,23 +127,70 @@ def parse_order_records(raw_records: list) -> tuple:
 
     single_records   = []
     changeplan_pairs = []
+    skipped_records  = []
+
+    def _add_has_installment(add):
+        """Check if Add OLI has an installment based on segment."""
+        segment  = add.get("segment", "")
+        contract = (add.get("contract_term") or "").strip()
+        inst_id  = (add.get("sf_installment_id") or "").strip()
+        if segment == "B2B":
+            return bool(inst_id)
+        else:  # B2C
+            return bool(contract) and contract != "No Commit Retail Price"
+
+    def _disc_has_installment(disc):
+        """Check if Disconnect OLI has an installment based on segment."""
+        segment  = disc.get("segment", "")
+        contract = (disc.get("contract_term") or "").strip()
+        inst_id  = (disc.get("sf_installment_id") or "").strip()
+        if segment == "B2B":
+            return bool(inst_id)
+        else:  # B2C
+            return bool(contract) and contract != "No Commit Retail Price"
+
+    def _skipped(rec, reason):
+        return {
+            "segment":           rec.get("segment"),
+            "order_id":          rec.get("order_id"),
+            "oli_id":            rec.get("oli_id"),
+            "sf_bancan":         rec.get("sf_bancan"),
+            "msisdn":            rec.get("msisdn"),
+            "product_name":      rec.get("product_name"),
+            "order_reason":      rec.get("order_reason"),
+            "contract_term":     rec.get("contract_term"),
+            "sf_installment_id": rec.get("sf_installment_id"),
+            "aria_bancan":       None, "aria_oli": None,
+            "aria_installment_id": None, "aria_plan_name": None,
+            "device_amount":     None, "monthly_amount": None,
+            "validation":        "✅",
+            "match_status":      reason,
+            "error":             None,
+        }
 
     for recs in orders.values():
         disc = next((r for r in recs if r["action"] == "Disconnect"), None)
         add  = next((r for r in recs if r["action"] == "Add"), None)
 
         if disc and add:
-            if (disc.get("contract_term") or "") == "No Commit Retail Price":
-                # Old device had no installment — validate Add OLI only
+            if _add_has_installment(add):
+                if _disc_has_installment(disc):
+                    # Both have installments — ChangePlan comparison
+                    changeplan_pairs.append({"disconnect": disc, "add": add})
+                else:
+                    # Old device had no installment — validate Add only
+                    single_records.append(add)
+            else:
+                # Add OLI has no installment — store with reason
+                skipped_records.append(_skipped(add, "Skipped - No Installment on Add OLI"))
+        elif add:
+            if _add_has_installment(add):
                 single_records.append(add)
             else:
-                # Both have installments — use ChangePlan comparison logic
-                changeplan_pairs.append({"disconnect": disc, "add": add})
-        elif add:
-            single_records.append(add)
-        # Disconnect-only rows are skipped
+                skipped_records.append(_skipped(add, "Skipped - No Installment on Add OLI"))
+        # Disconnect-only rows are skipped silently
 
-    return single_records, changeplan_pairs
+    return single_records, changeplan_pairs, skipped_records
 
 
 def parse_changeplan_records(raw_records: list) -> list:
