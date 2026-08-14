@@ -62,6 +62,10 @@ class InstallmentRunRequest(BaseModel):
     time_to:   str = "23:59"
 
 
+class InstallmentManualRunRequest(BaseModel):
+    order_ids: list[str]
+
+
 
 
 class SchedulerConfigRequest(BaseModel):
@@ -2223,6 +2227,77 @@ def do_installment_run(run_id: int, segment: str, date_from: str, date_to: str, 
         conn.close()
 
 
+def do_installment_manual_run(run_id: int, order_ids: list):
+    """Fetch SF order line items by Order ID and validate each against Aria."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    conn = get_connection()
+    try:
+        # Collect all records across all order IDs
+        records = []
+        for oid in order_ids:
+            raw = run_soql_query(inst_val.build_order_soql(oid.strip()))
+            records.extend(inst_val.parse_order_records(raw))
+
+        tasks = [(inst_val.process_single, r) for r in records]
+        total = len(tasks)
+        conn.execute("UPDATE installment_runs SET total=? WHERE id=?", (total, run_id))
+        conn.commit()
+
+        done = clean = mismatch = not_found = 0
+
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            futures = {ex.submit(fn, item): (fn, item) for fn, item in tasks}
+            for future in as_completed(futures):
+                if _inst_stop_flags.get(run_id):
+                    ex.shutdown(wait=False, cancel_futures=True)
+                    break
+                res   = future.result()
+                done += 1
+                if res is None:
+                    conn.execute("UPDATE installment_runs SET done=? WHERE id=?", (done, run_id))
+                    conn.commit()
+                    continue
+                v = res.get("validation", "")
+                if v == "✅":    clean     += 1
+                elif v == "⚠️":  mismatch  += 1
+                else:             not_found += 1
+
+                conn.execute("""
+                    INSERT INTO installment_results
+                    (run_id,segment,order_id,oli_id,sf_bancan,msisdn,product_name,order_reason,
+                     contract_term,sf_installment_id,aria_bancan,aria_oli,aria_installment_id,
+                     aria_plan_name,validation,match_status,error,device_amount,monthly_amount)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    run_id, res.get("segment"), res.get("order_id"), res.get("oli_id"),
+                    res.get("sf_bancan"), res.get("msisdn"), res.get("product_name"),
+                    res.get("order_reason"), res.get("contract_term"), res.get("sf_installment_id"),
+                    res.get("aria_bancan"), res.get("aria_oli"), res.get("aria_installment_id"),
+                    res.get("aria_plan_name"), res.get("validation"), res.get("match_status"),
+                    res.get("error"), res.get("device_amount"), res.get("monthly_amount"),
+                ))
+                conn.execute(
+                    "UPDATE installment_runs SET done=?,clean=?,mismatch=?,not_found=? WHERE id=?",
+                    (done, clean, mismatch, not_found, run_id),
+                )
+                conn.commit()
+
+        final = "stopped" if _inst_stop_flags.get(run_id) else "completed"
+        conn.execute(
+            "UPDATE installment_runs SET status=?,done=?,clean=?,mismatch=?,not_found=? WHERE id=?",
+            (final, done, clean, mismatch, not_found, run_id),
+        )
+        conn.commit()
+        trim_old_installment_runs(conn)
+    except Exception as exc:
+        conn.execute("UPDATE installment_runs SET status='failed' WHERE id=?", (run_id,))
+        conn.commit()
+        print(f"[installment-manual] run {run_id} FAILED: {exc}")
+    finally:
+        _inst_stop_flags.pop(run_id, None)
+        conn.close()
+
+
 @app.get("/api/installment-validator/runs")
 def get_installment_runs(request: Request):
     require_session(request)
@@ -2248,6 +2323,24 @@ def start_installment_run(req: InstallmentRunRequest, background_tasks: Backgrou
     conn.commit()
     conn.close()
     background_tasks.add_task(do_installment_run, run_id, req.segment, req.date_from, req.date_to, req.time_from, req.time_to)
+    return {"run_id": run_id, "status": "running"}
+
+
+@app.post("/api/installment-validator/manual-run")
+def start_installment_manual_run(req: InstallmentManualRunRequest, background_tasks: BackgroundTasks, request: Request):
+    require_session(request)
+    order_ids = [o.strip() for o in req.order_ids if o.strip()]
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="order_ids must not be empty")
+    conn = get_connection()
+    cur  = conn.execute(
+        "INSERT INTO installment_runs (triggered_at, segment, date_from, date_to, status, source) VALUES (?,?,?,?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), "Manual", "manual", "manual", "running", "manual"),
+    )
+    run_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    background_tasks.add_task(do_installment_manual_run, run_id, order_ids)
     return {"run_id": run_id, "status": "running"}
 
 

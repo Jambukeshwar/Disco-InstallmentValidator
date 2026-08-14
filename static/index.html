@@ -422,24 +422,32 @@
     <!-- ── Installment Purchase Validator controls ── -->
     <div id="inst-wrap" style="display:none;align-items:flex-end;gap:12px;flex-wrap:wrap;flex:1">
       <div class="mode-tabs" style="margin:0">
-        <button class="mode-tab active" id="inst-tab-b2c"  onclick="setInstSegment('B2C')">B2C</button>
-        <button class="mode-tab"        id="inst-tab-b2b"  onclick="setInstSegment('B2B')">B2B</button>
-        <button class="mode-tab"        id="inst-tab-cp"   onclick="setInstSegment('ChangePlan')">Change Plan</button>
-        <button class="mode-tab"        id="inst-tab-both" onclick="setInstSegment('Both')">All</button>
+        <button class="mode-tab active" id="inst-tab-b2c"     onclick="setInstSegment('B2C')">B2C</button>
+        <button class="mode-tab"        id="inst-tab-b2b"     onclick="setInstSegment('B2B')">B2B</button>
+        <button class="mode-tab"        id="inst-tab-cp"      onclick="setInstSegment('ChangePlan')">Change Plan</button>
+        <button class="mode-tab"        id="inst-tab-both"    onclick="setInstSegment('Both')">All</button>
+        <button class="mode-tab"        id="inst-tab-manual"  onclick="setInstSegment('Manual')">✏ Manual</button>
       </div>
-      <div class="field-wrap">
-        <div class="topbar-label">Date From</div>
-        <div class="datetime-pair">
-          <input type="date" id="inst-date-from"/>
-          <input type="time" id="inst-time-from" value="00:00"/>
+      <div id="inst-date-wrap" style="display:flex;gap:12px;align-items:flex-end">
+        <div class="field-wrap">
+          <div class="topbar-label">Date From</div>
+          <div class="datetime-pair">
+            <input type="date" id="inst-date-from"/>
+            <input type="time" id="inst-time-from" value="00:00"/>
+          </div>
+        </div>
+        <div class="field-wrap">
+          <div class="topbar-label">Date To</div>
+          <div class="datetime-pair">
+            <input type="date" id="inst-date-to"/>
+            <input type="time" id="inst-time-to" value="23:59"/>
+          </div>
         </div>
       </div>
-      <div class="field-wrap">
-        <div class="topbar-label">Date To</div>
-        <div class="datetime-pair">
-          <input type="date" id="inst-date-to"/>
-          <input type="time" id="inst-time-to" value="23:59"/>
-        </div>
+      <div id="inst-manual-wrap" style="display:none">
+        <div class="topbar-label">Order IDs — one per line or comma separated</div>
+        <textarea id="inst-order-input" placeholder="e.g. 8014X00000ABC123&#10;8014X00000XYZ456" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:8px 12px;border-radius:6px;outline:none;resize:none;width:320px;height:60px;line-height:1.5"></textarea>
+        <span id="inst-order-hint" style="font-size:11px;color:var(--text-dim);margin-left:6px">0 orders entered</span>
       </div>
       <button id="inst-run-btn" onclick="startInstallmentRun()" style="margin-top:18px;background:linear-gradient(135deg,var(--accent2),var(--accent));color:#fff;border:none;padding:9px 22px;border-radius:6px;font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer">▶ Run Validation</button>
       <button id="inst-stop-btn" onclick="stopInstallmentRun()" style="display:none;margin-top:18px;background:transparent;border:1px solid var(--red);color:var(--red);padding:9px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer">⏹ Stop</button>
@@ -1140,14 +1148,12 @@
     document.getElementById('inst-tab-b2b').classList.toggle('active',seg==='B2B');
     document.getElementById('inst-tab-cp').classList.toggle('active',seg==='ChangePlan');
     document.getElementById('inst-tab-both').classList.toggle('active',seg==='Both');
+    document.getElementById('inst-tab-manual').classList.toggle('active',seg==='Manual');
+    document.getElementById('inst-date-wrap').style.display=seg==='Manual'?'none':'flex';
+    document.getElementById('inst-manual-wrap').style.display=seg==='Manual'?'block':'none';
   }
 
   async function startInstallmentRun(){
-    const dateFrom=document.getElementById('inst-date-from').value;
-    const dateTo=document.getElementById('inst-date-to').value;
-    const timeFrom=document.getElementById('inst-time-from').value||'00:00';
-    const timeTo=document.getElementById('inst-time-to').value||'23:59';
-    if(!dateFrom||!dateTo){alert('Please select a date range.');return;}
     document.getElementById('inst-run-btn').disabled=true;
     document.getElementById('inst-stop-btn').style.display='inline-block';
     document.getElementById('inst-progress').style.display='block';
@@ -1157,6 +1163,28 @@
     const _leakWrap=document.getElementById('inst-stat-leak-wrap');
     if(_leakWrap)_leakWrap.style.display='none';
     document.getElementById('inst-table-wrap').innerHTML='<div style="padding:20px;color:var(--text-dim);font-size:13px">Fetching SF records...</div>';
+
+    // ── Manual mode: validate by Order ID ──────────────────────────────
+    if(_instSegment==='Manual'){
+      const raw=document.getElementById('inst-order-input').value||'';
+      const orderIds=raw.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
+      if(!orderIds.length){alert('Please enter at least one Order ID.');document.getElementById('inst-run-btn').disabled=false;document.getElementById('inst-stop-btn').style.display='none';return;}
+      document.getElementById('inst-progress-label').textContent='Starting Manual run...';
+      try{
+        const res=await fetch('/api/installment-validator/manual-run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({order_ids:orderIds})});
+        const d=await res.json();
+        _instRunId=d.run_id; _instBothPhase=0;
+        _instPoller=setInterval(pollInstallmentRun,2000);
+        loadInstHistory();
+      }catch(e){_instRunFailed(e);}
+      return;
+    }
+
+    const dateFrom=document.getElementById('inst-date-from').value;
+    const dateTo=document.getElementById('inst-date-to').value;
+    const timeFrom=document.getElementById('inst-time-from').value||'00:00';
+    const timeTo=document.getElementById('inst-time-to').value||'23:59';
+    if(!dateFrom||!dateTo){alert('Please select a date range.');document.getElementById('inst-run-btn').disabled=false;document.getElementById('inst-stop-btn').style.display='none';return;}
 
     if(_instSegment==='Both'){
       _instBothPhase=1; _instBothB2CId=null; _instBothB2BId=null; _instBothCPId=null;
@@ -1926,6 +1954,11 @@
   document.getElementById('msisdn-input').addEventListener('input',()=>{
     const n=parseMSISDNs(document.getElementById('msisdn-input').value);
     document.getElementById('msisdn-hint').textContent=n.length?`${n.length} number${n.length>1?'s':''} entered`:'0 numbers entered';
+  });
+
+  document.getElementById('inst-order-input').addEventListener('input',()=>{
+    const n=(document.getElementById('inst-order-input').value||'').split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
+    document.getElementById('inst-order-hint').textContent=`${n.length} order${n.length!==1?'s':''} entered`;
   });
 
   function parseMSISDNs(raw){return raw.split(/[\n,]+/).map(s=>s.trim()).filter(s=>/^\d{7,15}$/.test(s));}

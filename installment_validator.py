@@ -75,6 +75,39 @@ def build_changeplan_soql(date_from: str, date_to: str, time_from: str = "00:00"
     )
 
 
+def build_order_soql(order_id: str) -> str:
+    """Fetch all order line items for a given SF Order ID."""
+    return (
+        "SELECT OrderId, order.vlocity_cmt__OrderStatus__c, order.vlocity_cmt__Reason__c, "
+        "vlocity_cmt__ServiceAccountId__c, order.type, PR_Original_OLI_ID__c, "
+        "vlocity_cmt__ServiceAccountId__r.MSISDN__c, "
+        "vlocity_cmt__BillingAccountId__r.PR_Mobile_Billing_Number__c, "
+        "product2.name, Contract_Term__c, PRB2C_Installment_ID__c, PRB2B_InstallmentPlanID__c, "
+        "vlocity_cmt__Action__c, vlocity_cmt__BillingAccountId__r.Segment__c "
+        f"FROM orderitem WHERE OrderId = '{order_id}'"
+    )
+
+
+def parse_order_records(raw_records: list) -> list:
+    """Parse SF records fetched by Order ID — auto-detects segment from Segment__c."""
+    out = []
+    for r in raw_records:
+        segment       = _nested(r, "vlocity_cmt__BillingAccountId__r", "Segment__c") or "B2C"
+        inst_id_field = "PRB2C_Installment_ID__c" if segment == "B2C" else "PRB2B_InstallmentPlanID__c"
+        out.append({
+            "segment":           segment,
+            "order_id":          r.get("OrderId") or r.get("Id"),
+            "oli_id":            r.get("PR_Original_OLI_ID__c"),
+            "sf_bancan":         _nested(r, "vlocity_cmt__BillingAccountId__r", "PR_Mobile_Billing_Number__c"),
+            "msisdn":            _nested(r, "vlocity_cmt__ServiceAccountId__r", "MSISDN__c"),
+            "product_name":      _nested(r, "Product2", "Name"),
+            "order_reason":      _nested(r, "Order", "vlocity_cmt__Reason__c"),
+            "contract_term":     r.get("Contract_Term__c"),
+            "sf_installment_id": str(r.get(inst_id_field) or "").strip(),
+        })
+    return out
+
+
 def parse_changeplan_records(raw_records: list) -> list:
     """Group SF change plan rows by OrderId into disconnect+add pairs.
     Segment is read from Segment__c on each row; installment ID picked accordingly."""
