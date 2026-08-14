@@ -183,7 +183,7 @@ def check_aria_full(oli_id: str) -> dict:
         "query_string":   f"client_plan_instance_id={oli_id}",
     }
     try:
-        resp = requests.post(ARIA_URL, json=payload, headers=HEADERS, timeout=30)
+        resp = requests.post(ARIA_URL, json=payload, headers=HEADERS, timeout=60)
         data = resp.json()
         error_code = data.get("error_code")
         if error_code != 0:
@@ -363,7 +363,7 @@ def check_aria(oli_id: str) -> dict:
         "query_string":    f"client_plan_instance_id={oli_id}",
     }
     try:
-        resp = requests.post(ARIA_URL, json=payload, headers=HEADERS, timeout=30)
+        resp = requests.post(ARIA_URL, json=payload, headers=HEADERS, timeout=60)
         data = resp.json()
 
         if data.get("error_code") != 0 or not data.get("plan_instance_details"):
