@@ -107,8 +107,11 @@ def process_single(msisdn: str, order_ban: str = None) -> dict:
             for offer in offers:
                 offer_attr = offer.get("Attr", {})
                 if "CommercialPlanName" in offer_attr and offer_attr.get("OfferType") in PLAN_OFFER_TYPES:
-                    plan_offer = offer
-                    break
+                    if plan_offer is None:
+                        plan_offer = offer  # first match as fallback
+                    if (offer.get("OfferStatusDescription") or "").lower() == "active":
+                        plan_offer = offer  # prefer active plan
+                        break
 
             if plan_offer:
                 offer_attr = plan_offer.get("Attr", {})

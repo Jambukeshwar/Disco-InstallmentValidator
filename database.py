@@ -112,6 +112,7 @@ def init_db():
             sf_provisioning TEXT,
             sf_disc_reason TEXT,
             sf_product TEXT,
+            sf_plan_name TEXT,
             sf_asset_ref_id TEXT,
             sf_root_item_id TEXT,
             sf_last_modified TEXT,
@@ -133,6 +134,8 @@ def init_db():
     existing_sf = {row[1] for row in c.execute("PRAGMA table_info(sf_asset_results)")}
     if "sf_last_modified" not in existing_sf:
         c.execute("ALTER TABLE sf_asset_results ADD COLUMN sf_last_modified TEXT")
+    if "sf_plan_name" not in existing_sf:
+        c.execute("ALTER TABLE sf_asset_results ADD COLUMN sf_plan_name TEXT")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS order_runs (

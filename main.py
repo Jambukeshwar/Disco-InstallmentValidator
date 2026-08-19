@@ -730,15 +730,16 @@ def _insert_sf_asset_result(conn, run_id: int, r: dict):
     conn.execute("""
         INSERT INTO sf_asset_results (
             run_id, msisdn, sf_asset_id, sf_ban_can, sf_provisioning,
-            sf_disc_reason, sf_product, sf_asset_ref_id, sf_root_item_id,
+            sf_disc_reason, sf_product, sf_plan_name, sf_asset_ref_id, sf_root_item_id,
             sf_last_modified, sf_validation, sf_field_to_review, sf_error
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         run_id,
         r.get("msisdn"), r.get("sf_asset_id"), r.get("sf_ban_can"),
         r.get("sf_provisioning"), r.get("sf_disc_reason"), r.get("sf_product"),
-        r.get("sf_asset_ref_id"), r.get("sf_root_item_id"), r.get("sf_last_modified"),
-        r.get("sf_validation"), r.get("sf_field_to_review"), r.get("sf_error")
+        r.get("sf_plan_name"), r.get("sf_asset_ref_id"), r.get("sf_root_item_id"),
+        r.get("sf_last_modified"), r.get("sf_validation"), r.get("sf_field_to_review"),
+        r.get("sf_error")
     ))
 
 
@@ -2568,14 +2569,16 @@ def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
     rows = conn.execute("""
         SELECT r.msisdn, r.order_ban, r.ban_can AS aria_bancan,
                r.account_status, r.master_plan_status, r.plan_name,
+               r.client_plan_instance_id AS aria_client_plan_instance_id,
                r.plan_status, r.plan_status_date, r.child_plan1_status AS device_status,
                r.inst_status, r.inst_string, r.nso_exist,
                r.status_summary AS aria_status_summary,
                r.field_to_review AS aria_field_to_review, r.validation AS aria_validation,
-               m.mtx_ban_can, m.mtx_subscription_status, m.mtx_plan_status,
+               m.mtx_ban_can, m.mtx_subscription_status, m.mtx_plan_name,
+               m.mtx_plan_status, m.mtx_resource_id,
                m.mtx_device_status, m.mtx_field_to_review, m.mtx_validation,
                s.sf_ban_can, s.sf_provisioning, s.sf_disc_reason,
-               s.sf_field_to_review, s.sf_validation
+               s.sf_plan_name, s.sf_field_to_review, s.sf_validation
         FROM results r
         LEFT JOIN matrixx_results m  ON m.run_id = r.run_id AND m.msisdn = r.msisdn
         LEFT JOIN sf_asset_results s ON s.run_id = r.run_id AND s.msisdn = r.msisdn
@@ -2610,8 +2613,9 @@ def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
             "aria_ban_can":             r.get("aria_bancan"),
             "account_status":           r.get("account_status"),
             "master_plan_status":       r.get("master_plan_status"),
-            "plan_name":                r.get("plan_name"),
-            "plan_status":              r.get("plan_status"),
+            "plan_name":                    r.get("plan_name"),
+            "aria_client_plan_instance_id": r.get("aria_client_plan_instance_id"),
+            "plan_status":                  r.get("plan_status"),
             "plan_status_date":         r.get("plan_status_date"),
             "device_status":            r.get("device_status"),
             "inst_status":              r.get("inst_status"),
@@ -2621,12 +2625,15 @@ def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
             "aria_field_to_review":     r.get("aria_field_to_review"),
             "mtx_ban_can":              r.get("mtx_ban_can"),
             "mtx_subscription_status":  r.get("mtx_subscription_status"),
+            "mtx_plan_name":            r.get("mtx_plan_name"),
             "mtx_plan_status":          r.get("mtx_plan_status"),
+            "mtx_resource_id":          r.get("mtx_resource_id"),
             "mtx_device_status":        r.get("mtx_device_status"),
             "mtx_field_to_review":      r.get("mtx_field_to_review"),
             "sf_ban_can":               r.get("sf_ban_can"),
             "sf_provisioning":          r.get("sf_provisioning"),
             "sf_disc_reason":           r.get("sf_disc_reason"),
+            "sf_plan_name":             r.get("sf_plan_name"),
             "sf_field_to_review":       r.get("sf_field_to_review"),
             "overall":                  overall,
             "combined_field_to_review": combined_field_to_review,

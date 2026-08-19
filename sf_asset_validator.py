@@ -45,12 +45,12 @@ def fetch_asset(msisdn: str) -> list[dict]:
                vlocity_cmt__AssetReferenceId__c,
                vlocity_cmt__RootItemId__c,
                Product2.name,
-               LastModifiedDate
+               LastModifiedDate,
+               CreatedDate
         FROM asset
         WHERE PR_MSISDN__c = '{msisdn}'
           AND product2.name != 'SIM Card'
-        ORDER BY LastModifiedDate DESC
-        LIMIT 1
+        ORDER BY CreatedDate DESC
     """
 
     headers = {"Authorization": f"Bearer {access_token}"}
@@ -99,6 +99,7 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
         "sf_provisioning":     None,
         "sf_disc_reason":      None,
         "sf_product":          None,
+        "sf_plan_name":        None,
         "sf_asset_ref_id":     None,
         "sf_root_item_id":     None,
         "sf_last_modified":    None,
@@ -118,24 +119,45 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
                 "sf_field_to_review": "Asset_Not_Found",
             }
 
-        # Take the first non-SIM asset record
-        rec = records[0]
+        # Pick the best asset:
+        #   1 asset  → use it
+        #   2+ assets → prefer Active (most recently created = first since ORDER BY CreatedDate DESC)
+        #               if 0 Active → use most recently created (first record)
+        #               if 2+ Active → use most recently created Active + flag Multiple_Active_Assets
+        multi_active_flag = False
+        if len(records) == 1:
+            rec = records[0]
+        else:
+            active_assets = [
+                r for r in records
+                if (r.get("vlocity_cmt__ProvisioningStatus__c") or "").lower() == "active"
+            ]
+            if len(active_assets) == 0:
+                rec = records[0]          # most recently created, no Active found
+            elif len(active_assets) == 1:
+                rec = active_assets[0]
+            else:
+                rec = active_assets[0]    # most recently created Active (list already sorted)
+                multi_active_flag = True
 
         sf_ban        = _extract_ban(rec)
         sf_status     = rec.get("vlocity_cmt__ProvisioningStatus__c") or "N/A"
         sf_reason     = rec.get("Disconnection_Reason__c") or "N/A"
         product_name  = (rec.get("Product2") or {}).get("name") or "N/A"
 
-        base["sf_asset_id"]     = rec.get("Id")
-        base["sf_ban_can"]      = sf_ban
-        base["sf_provisioning"] = sf_status
-        base["sf_disc_reason"]  = sf_reason
-        base["sf_product"]      = product_name
-        base["sf_asset_ref_id"] = rec.get("vlocity_cmt__AssetReferenceId__c")
-        base["sf_root_item_id"] = rec.get("vlocity_cmt__RootItemId__c")
+        base["sf_asset_id"]      = rec.get("Id")
+        base["sf_ban_can"]       = sf_ban
+        base["sf_provisioning"]  = sf_status
+        base["sf_disc_reason"]   = sf_reason
+        base["sf_product"]       = product_name
+        base["sf_plan_name"]     = product_name
+        base["sf_asset_ref_id"]  = rec.get("vlocity_cmt__AssetReferenceId__c")
+        base["sf_root_item_id"]  = rec.get("vlocity_cmt__RootItemId__c")
         base["sf_last_modified"] = rec.get("LastModifiedDate")
 
         review = []
+        if multi_active_flag:
+            review.append("Multiple_Active_Assets")
 
         # BAN-CAN cross-check first — skip validation entirely if mismatched
         if order_ban and sf_ban != "N/A":
