@@ -143,7 +143,8 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
         sf_ban        = _extract_ban(rec)
         sf_status     = rec.get("vlocity_cmt__ProvisioningStatus__c") or "N/A"
         sf_reason     = rec.get("Disconnection_Reason__c") or "N/A"
-        product_name  = (rec.get("Product2") or {}).get("name") or "N/A"
+        prod          = rec.get("Product2") or {}
+        product_name  = prod.get("Name") or prod.get("name") or "N/A"
 
         base["sf_asset_id"]      = rec.get("Id")
         base["sf_ban_can"]       = sf_ban
