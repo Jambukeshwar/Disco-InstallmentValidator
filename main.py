@@ -711,8 +711,8 @@ def _insert_matrixx_result(conn, run_id: int, r: dict):
             mtx_usage_guide, mtx_subscription, mtx_subscription_id,
             mtx_subscription_status, mtx_plan_name, mtx_plan_code,
             mtx_plan_status, mtx_plan_charge, mtx_resource_id,
-            mtx_validation, mtx_field_to_review, mtx_error
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            mtx_device_status, mtx_validation, mtx_field_to_review, mtx_error
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         run_id,
         r.get("msisdn"), r.get("mtx_order_ban"), r.get("mtx_ban_can"),
@@ -721,6 +721,7 @@ def _insert_matrixx_result(conn, run_id: int, r: dict):
         r.get("mtx_subscription_status"), r.get("mtx_plan_name"),
         r.get("mtx_plan_code"), r.get("mtx_plan_status"),
         r.get("mtx_plan_charge"), r.get("mtx_resource_id"),
+        r.get("mtx_device_status"),
         r.get("mtx_validation"), r.get("mtx_field_to_review"),
         r.get("mtx_error")
     ))
