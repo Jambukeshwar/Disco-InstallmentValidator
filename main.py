@@ -590,10 +590,10 @@ def generate_suggestion(aria_fields: str, mtx_fields: str) -> str:
     if "Possible_reactivation" in aria:
         steps.append("Verify if customer was reactivated — no action may be needed")
 
-    plan_cancelled = "Plan_Status" not in aria   # Plan_Status flag means plan is NOT cancelled
-    device_active  = "Device_Status" in aria
-    nso_needed     = "NSO" in aria
-    inst_review    = "Installment_Status" in aria
+    plan_cancelled = "Aria_Plan_Status" not in aria   # Aria_Plan_Status flag means plan is NOT cancelled
+    device_active  = "Aria_Device_Status" in aria
+    nso_needed     = "Aria_NSO" in aria
+    inst_review    = "Aria_Installment_Status" in aria
 
     if plan_cancelled and (nso_needed or device_active):
         # Plan is cancelled but still has pending work — must activate plan first
@@ -609,18 +609,18 @@ def generate_suggestion(aria_fields: str, mtx_fields: str) -> str:
             steps.append("Create NSO balance order in Aria")
         if device_active:
             steps.append("Cancel device with reason in Aria")
-        if "Plan_Status" in aria:
+        if "Aria_Plan_Status" in aria:
             steps.append("Cancel plan in Aria")
 
     if inst_review and not nso_needed:
         steps.append("Review installment status in Aria")
 
     # Matrixx actions
-    if "Device_Active" in mtx:
+    if "MTX_Device_Status" in mtx:
         steps.append("Deactivate device in Matrixx")
-    if "Subscription_Active" in mtx:
+    if "MTX_Subscription_Active" in mtx:
         steps.append("Check active subscription in Matrixx")
-    if "Plan_Active" in mtx:
+    if "MTX_Plan_Active" in mtx:
         steps.append("Check active plan in Matrixx")
 
     all_clean = (

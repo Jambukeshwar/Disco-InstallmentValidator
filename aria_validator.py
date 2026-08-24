@@ -340,13 +340,13 @@ def _validate_plan_instance(msisdn: str, plan: dict, activated_date: str = None,
         )
 
         if plan_status_cd != 'Cancelled':
-            reviewfield.append('Plan_Status')
+            reviewfield.append('Aria_Plan_Status')
         if child_plan1_status == 'Active':
-            reviewfield.append('Device_Status')
+            reviewfield.append('Aria_Device_Status')
         if Installmentstatus in ('Blank', 'Active', 'active') and not exempt_blank_inst:
-            reviewfield.append('Installment_Status')
+            reviewfield.append('Aria_Installment_Status')
         if NSOExist not in ('N/A', 'Yes', 'NSO Not Required'):
-            reviewfield.append('NSO')
+            reviewfield.append('Aria_NSO')
         if not reviewfield:
             reviewfield.append('No_Action_Required')
 

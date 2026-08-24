@@ -150,11 +150,11 @@ def process_single(msisdn: str, order_ban: str = None) -> dict:
         device_status = (base["mtx_device_status"] or "").lower()
 
         if sub_status == "active":
-            review.append("Subscription_Active")
+            review.append("MTX_Subscription_Active")
         if plan_status == "active":
-            review.append("Plan_Active")
+            review.append("MTX_Plan_Active")
         if device_status == "active":
-            review.append("Device_Active")
+            review.append("MTX_Device_Status")
 
         if not review:
             review.append("No_Action_Required")

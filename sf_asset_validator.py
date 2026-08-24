@@ -116,14 +116,15 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
                 **base,
                 "sf_error":       "MSISDN not found in SF assets",
                 "sf_validation":  "❌",
-                "sf_field_to_review": "Asset_Not_Found",
+                "sf_field_to_review": "SF_Asset_Not_Found",
             }
 
-        # Pick the best asset:
-        #   1 asset  → use it
-        #   2+ assets → prefer Active (most recently created = first since ORDER BY CreatedDate DESC)
-        #               if 0 Active → use most recently created (first record)
-        #               if 2+ Active → use most recently created Active + flag Multiple_Active_Assets
+        # Pick the best asset (records already sorted by CreatedDate DESC):
+        #   Priority 1: Active          — most recently created Active
+        #   Priority 2: New / Suspended — most recently created New or Suspended
+        #   Fallback:   any             — most recently created
+        #   2+ Active → pick most recently created Active + flag Multiple_Active_Assets
+        PRIORITY2_STATUSES = {"new", "suspended"}
         multi_active_flag = False
         if len(records) == 1:
             rec = records[0]
@@ -132,13 +133,18 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
                 r for r in records
                 if (r.get("vlocity_cmt__ProvisioningStatus__c") or "").lower() == "active"
             ]
-            if len(active_assets) == 0:
-                rec = records[0]          # most recently created, no Active found
-            elif len(active_assets) == 1:
+            if len(active_assets) == 1:
                 rec = active_assets[0]
-            else:
-                rec = active_assets[0]    # most recently created Active (list already sorted)
+            elif len(active_assets) > 1:
+                rec = active_assets[0]    # most recently created Active
                 multi_active_flag = True
+            else:
+                # No Active — try New / Suspended
+                p2_assets = [
+                    r for r in records
+                    if (r.get("vlocity_cmt__ProvisioningStatus__c") or "").lower() in PRIORITY2_STATUSES
+                ]
+                rec = p2_assets[0] if p2_assets else records[0]
 
         sf_ban        = _extract_ban(rec)
         sf_status     = rec.get("vlocity_cmt__ProvisioningStatus__c") or "N/A"
@@ -158,7 +164,7 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
 
         review = []
         if multi_active_flag:
-            review.append("Multiple_Active_Assets")
+            review.append("SF_Multiple_Active_Assets")
 
         # BAN-CAN cross-check first — skip validation entirely if mismatched
         if order_ban and sf_ban != "N/A":
@@ -169,7 +175,7 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
 
         # Provisioning status check
         if sf_status.lower() not in CLEAN_STATUSES:
-            review.append("Provisioning_Not_Disconnected")
+            review.append("SF_Asset_Status")
 
         if not review:
             review.append("No_Action_Required")
