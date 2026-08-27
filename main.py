@@ -656,6 +656,7 @@ def trim_old_runs(conn, keep_agent: int = 10, keep_other: int = 10):
             conn.execute("DELETE FROM results WHERE run_id = ?", (row["id"],))
             conn.execute("DELETE FROM matrixx_results WHERE run_id = ?", (row["id"],))
             conn.execute("DELETE FROM sf_asset_results WHERE run_id = ?", (row["id"],))
+            conn.execute("DELETE FROM nokia_results WHERE run_id = ?", (row["id"],))
             conn.execute("DELETE FROM runs WHERE id = ?", (row["id"],))
     conn.commit()
 
@@ -1039,15 +1040,16 @@ def _build_excel_bytes(run_id: int):
     run = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
     if not run:
         raise ValueError(f"Run {run_id} not found")
-    aria_results = conn.execute("SELECT * FROM results          WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
-    mtx_results  = conn.execute("SELECT * FROM matrixx_results  WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
-    sf_results   = conn.execute("SELECT * FROM sf_asset_results WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
+    aria_results  = conn.execute("SELECT * FROM results          WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
+    mtx_results   = conn.execute("SELECT * FROM matrixx_results  WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
+    sf_results    = conn.execute("SELECT * FROM sf_asset_results WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
+    nok_results   = conn.execute("SELECT * FROM nokia_results    WHERE run_id = ? ORDER BY msisdn", (run_id,)).fetchall()
     conn.close()
-    buf, filename = _build_excel_workbook(run, aria_results, mtx_results, sf_results)
+    buf, filename = _build_excel_workbook(run, aria_results, mtx_results, sf_results, nok_results)
     return buf.getvalue(), filename
 
 
-def _build_excel_workbook(run, aria_results, mtx_results, sf_results):
+def _build_excel_workbook(run, aria_results, mtx_results, sf_results, nok_results=None):
     """Build the Excel workbook and return (BytesIO, filename)."""
     run_d = dict(run)
 
@@ -1270,6 +1272,24 @@ def _build_excel_workbook(run, aria_results, mtx_results, sf_results):
     color_rows(ws3, [dict(x) for x in sf_results], "sf_validation", sf_headers)
     autofit(ws3)
 
+    # ── Sheet 4: Nokia
+    ws4 = wb.create_sheet("Nokia Validation")
+    nok_headers = [
+        "MSISDN", "Number Status", "SIM Status", "ICCID", "IMSI",
+        "Validation", "Fields to Review", "Error"
+    ]
+    style_headers(ws4, nok_headers)
+    for row_idx, r in enumerate([dict(x) for x in (nok_results or [])], 2):
+        vals = [
+            r.get("msisdn"), r.get("nok_number_status"), r.get("nok_sim_status"),
+            r.get("nok_iccid"), r.get("nok_imsi"),
+            r.get("nok_validation"), r.get("nok_field_to_review"), r.get("nok_error")
+        ]
+        for col, val in enumerate(vals, 1):
+            ws4.cell(row=row_idx, column=col, value=val)
+    color_rows(ws4, [dict(x) for x in (nok_results or [])], "nok_validation", nok_headers)
+    autofit(ws4)
+
     # ── Sheet 5: Combined View
     ws5 = wb.create_sheet("Combined View")
     combined_headers = [
@@ -1467,6 +1487,20 @@ def get_sf_asset_results(run_id: int, request: Request):
         raise HTTPException(status_code=404, detail="Run not found")
     results = conn.execute(
         "SELECT * FROM sf_asset_results WHERE run_id = ? ORDER BY msisdn", (run_id,)
+    ).fetchall()
+    conn.close()
+    return {"run": dict(run), "results": [dict(r) for r in results]}
+
+
+@app.get("/api/runs/{run_id}/nokia")
+def get_nokia_results(run_id: int, request: Request):
+    require_session(request)
+    conn = get_connection()
+    run = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    results = conn.execute(
+        "SELECT * FROM nokia_results WHERE run_id = ? ORDER BY msisdn", (run_id,)
     ).fetchall()
     conn.close()
     return {"run": dict(run), "results": [dict(r) for r in results]}

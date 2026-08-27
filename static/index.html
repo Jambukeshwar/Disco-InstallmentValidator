@@ -468,6 +468,7 @@
     <button class="sys-tab active" id="sys-tab-aria"     onclick="setSystemTab('aria')">🔵 Aria</button>
     <button class="sys-tab"        id="sys-tab-matrixx"  onclick="setSystemTab('matrixx')">🟠 Matrixx</button>
     <button class="sys-tab"        id="sys-tab-sf"       onclick="setSystemTab('sf')">🟢 Salesforce Asset</button>
+    <button class="sys-tab"        id="sys-tab-nokia"    onclick="setSystemTab('nokia')">📡 Nokia</button>
     <button class="sys-tab"        id="sys-tab-combined" onclick="setSystemTab('combined')">🔀 Combined View</button>
     <button class="sys-tab"        id="sys-tab-ai"       onclick="setSystemTab('ai')">🤖 AI Insights</button>
     <button class="sys-tab"        id="sys-tab-journey"  onclick="setSystemTab('journey')">📊 Journey</button>
@@ -1036,7 +1037,18 @@
     { key: 'sf_error',           label: 'Error' },
   ];
 
-  let allResults=[], allMatrixxResults=[], allSFAssetResults=[];
+  const NOK_COLS = [
+    { key: 'nok_validation',      label: 'Status' },
+    { key: 'msisdn',              label: 'MSISDN' },
+    { key: 'nok_number_status',   label: 'Number Status' },
+    { key: 'nok_sim_status',      label: 'SIM Status' },
+    { key: 'nok_iccid',           label: 'ICCID' },
+    { key: 'nok_imsi',            label: 'IMSI' },
+    { key: 'nok_field_to_review', label: 'Fields to Review' },
+    { key: 'nok_error',           label: 'Error' },
+  ];
+
+  let allResults=[], allMatrixxResults=[], allSFAssetResults=[], allNokiaResults=[];
   let currentRunId=null, currentFilter='all', pollInterval=null;
   let currentMode='sf', currentSystemTab='aria';
   let _detailRow=null, _detailMtx=null, _detailSF=null, _pendingAction=null;
@@ -1968,6 +1980,7 @@
     document.getElementById('sys-tab-aria').classList.toggle('active',tab==='aria');
     document.getElementById('sys-tab-matrixx').classList.toggle('active',tab==='matrixx');
     document.getElementById('sys-tab-sf').classList.toggle('active',tab==='sf');
+    document.getElementById('sys-tab-nokia').classList.toggle('active',tab==='nokia');
     document.getElementById('sys-tab-combined').classList.toggle('active',tab==='combined');
     document.getElementById('sys-tab-ai').classList.toggle('active',tab==='ai');
     document.getElementById('sys-tab-journey').classList.toggle('active',tab==='journey');
@@ -1975,6 +1988,7 @@
     if(tab==='aria')applyFilter();
     else if(tab==='matrixx')renderMatrixxTable();
     else if(tab==='sf')renderSFAssetTable();
+    else if(tab==='nokia')renderNokiaTable();
     else if(tab==='combined')renderCombined();
     else if(tab==='ai')renderAIInsights();
     else if(tab==='journey')renderJourney();
@@ -2162,20 +2176,21 @@
 
   async function loadRun(runId){
     currentRunId=runId;document.getElementById('download-btn').disabled=true;
-    const[aR,mR,sR]=await Promise.all([fetch(`/api/runs/${runId}`),fetch(`/api/runs/${runId}/matrixx`),fetch(`/api/runs/${runId}/sf-asset`)]);
-    const aD=await aR.json(),mD=await mR.json(),sD=await sR.json();
+    const[aR,mR,sR,nR]=await Promise.all([fetch(`/api/runs/${runId}`),fetch(`/api/runs/${runId}/matrixx`),fetch(`/api/runs/${runId}/sf-asset`),fetch(`/api/runs/${runId}/nokia`)]);
+    const aD=await aR.json(),mD=await mR.json(),sD=await sR.json(),nD=await nR.json();
 
     // Sort results
     const sortedAria = aD.results.sort((a,b)=>(a.msisdn||'').localeCompare(b.msisdn||''));
     allMatrixxResults = mD.results.sort((a,b)=>(a.msisdn||'').localeCompare(b.msisdn||''));
     allSFAssetResults = sD.results.sort((a,b)=>(a.msisdn||'').localeCompare(b.msisdn||''));
+    allNokiaResults   = (nD.results||[]).sort((a,b)=>(a.msisdn||'').localeCompare(b.msisdn||''));
 
     // Inject ban_match into each Aria row — order_ban is now stored in the Aria result itself
     allResults = sortedAria.map(r => ({ ...r, ban_match: getBanMatch(r) }));
 
     document.getElementById('download-btn').disabled=false;
     updateStats();
-    if(currentSystemTab==='aria')applyFilter();else if(currentSystemTab==='matrixx')renderMatrixxTable();else if(currentSystemTab==='sf')renderSFAssetTable();else if(currentSystemTab==='ai')renderAIInsights();else if(currentSystemTab==='journey')renderJourney();
+    if(currentSystemTab==='aria')applyFilter();else if(currentSystemTab==='matrixx')renderMatrixxTable();else if(currentSystemTab==='sf')renderSFAssetTable();else if(currentSystemTab==='nokia')renderNokiaTable();else if(currentSystemTab==='ai')renderAIInsights();else if(currentSystemTab==='journey')renderJourney();
     loadHistory();
   }
 
@@ -2183,6 +2198,7 @@
     let rows,vk,ek;
     if(currentSystemTab==='matrixx'){rows=allMatrixxResults;vk='mtx_validation';ek='mtx_error';}
     else if(currentSystemTab==='sf'){rows=allSFAssetResults;vk='sf_validation';ek='sf_error';}
+    else if(currentSystemTab==='nokia'){rows=allNokiaResults;vk='nok_validation';ek='nok_error';}
     else{rows=allResults;vk='validation';ek='error_msg';}
     document.getElementById('stat-total').textContent=rows.length;
     document.getElementById('stat-ok').textContent=rows.filter(r=>r[vk]==='✅').length;
@@ -2195,6 +2211,7 @@
   function applyFilter(){
     if(currentSystemTab==='matrixx'){renderMatrixxTable();return;}
     if(currentSystemTab==='sf'){renderSFAssetTable();return;}
+    if(currentSystemTab==='nokia'){renderNokiaTable();return;}
     if(currentSystemTab==='ai'){renderAIInsights();return;}
     const s=document.getElementById('search-input').value.toLowerCase();
     let rows=allResults;
@@ -2285,6 +2302,31 @@
         return `<td class="${v==='N/A'||v===''?'cell-na':''}">${v}</td>`;
       }).join('');
       return `<tr onclick="openDetailModal('${r.msisdn}')" title="Click to view details & actions">${cells}</tr>`;
+    }).join('');
+    wrap.innerHTML=`<table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
+  }
+
+  function renderNokiaTable(){
+    const wrap=document.getElementById('table-wrap');
+    const s=(document.getElementById('search-input').value||'').toLowerCase();
+    let rows=allNokiaResults;
+    if(currentFilter==='ok')rows=rows.filter(r=>r.nok_validation==='✅');
+    if(currentFilter==='warn')rows=rows.filter(r=>r.nok_validation==='⚠️');
+    if(currentFilter==='err')rows=rows.filter(r=>r.nok_error);
+    if(s)rows=rows.filter(r=>(r.msisdn||'').includes(s));
+    if(!rows.length){wrap.innerHTML=`<div id="empty-state"><div class="empty-icon">📡</div><div class="empty-title">No Nokia results</div><div class="empty-sub">Run a validation to see Nokia data.</div></div>`;return;}
+    const thead=NOK_COLS.map(c=>`<th>${c.label}</th>`).join('');
+    const tbody=rows.map(r=>{
+      const cells=NOK_COLS.map(c=>{
+        let v=r[c.key]??'';
+        if(c.key==='nok_validation')return `<td><span class="val-badge">${v||'—'}</span></td>`;
+        if(c.key==='msisdn')return `<td class="cell-msisdn">${v}</td>`;
+        if(c.key==='nok_error'&&v)return `<td class="cell-err" title="${v}">${v}</td>`;
+        if(c.key==='nok_field_to_review')return `<td class="${v&&v!=='No_Action_Required'?'cell-warn':'cell-ok'}">${v||'—'}</td>`;
+        if(!v||v==='N/A')return `<td class="cell-na">N/A</td>`;
+        return `<td title="${v}">${v}</td>`;
+      }).join('');
+      return `<tr>${cells}</tr>`;
     }).join('');
     wrap.innerHTML=`<table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
   }
