@@ -109,6 +109,7 @@ def init_db():
             msisdn TEXT,
             sf_asset_id TEXT,
             sf_ban_can TEXT,
+            sf_oli_id TEXT,
             sf_provisioning TEXT,
             sf_disc_reason TEXT,
             sf_product TEXT,
@@ -136,6 +137,25 @@ def init_db():
         c.execute("ALTER TABLE sf_asset_results ADD COLUMN sf_last_modified TEXT")
     if "sf_plan_name" not in existing_sf:
         c.execute("ALTER TABLE sf_asset_results ADD COLUMN sf_plan_name TEXT")
+    if "sf_oli_id" not in existing_sf:
+        c.execute("ALTER TABLE sf_asset_results ADD COLUMN sf_oli_id TEXT")
+
+    # Nokia results table
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS nokia_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            msisdn TEXT,
+            nok_number_status TEXT,
+            nok_sim_status TEXT,
+            nok_iccid TEXT,
+            nok_imsi TEXT,
+            nok_validation TEXT,
+            nok_field_to_review TEXT,
+            nok_error TEXT,
+            FOREIGN KEY (run_id) REFERENCES runs(id)
+        )
+    """)
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS order_runs (

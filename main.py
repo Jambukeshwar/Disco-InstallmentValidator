@@ -21,6 +21,7 @@ from aria_actions import cancel_plan, cancel_installment, create_nso_order, acti
 from matrixx_actions import deactivate_device
 import matrixx_validator
 import sf_asset_validator
+import nokia_validator
 from auth import init_auth_db, verify_login, logout as auth_logout, get_session
 from email_report import build_html_body, send_report, build_connectivity_alert_html, send_alert
 import installment_validator as inst_val
@@ -727,16 +728,30 @@ def _insert_matrixx_result(conn, run_id: int, r: dict):
     ))
 
 
+def _insert_nokia_result(conn, run_id: int, r: dict):
+    conn.execute("""
+        INSERT INTO nokia_results (
+            run_id, msisdn, nok_number_status, nok_sim_status,
+            nok_iccid, nok_imsi, nok_validation, nok_field_to_review, nok_error
+        ) VALUES (?,?,?,?,?,?,?,?,?)
+    """, (
+        run_id,
+        r.get("msisdn"), r.get("nok_number_status"), r.get("nok_sim_status"),
+        r.get("nok_iccid"), r.get("nok_imsi"),
+        r.get("nok_validation"), r.get("nok_field_to_review"), r.get("nok_error")
+    ))
+
+
 def _insert_sf_asset_result(conn, run_id: int, r: dict):
     conn.execute("""
         INSERT INTO sf_asset_results (
-            run_id, msisdn, sf_asset_id, sf_ban_can, sf_provisioning,
+            run_id, msisdn, sf_asset_id, sf_ban_can, sf_oli_id, sf_provisioning,
             sf_disc_reason, sf_product, sf_plan_name, sf_asset_ref_id, sf_root_item_id,
             sf_last_modified, sf_validation, sf_field_to_review, sf_error
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         run_id,
-        r.get("msisdn"), r.get("sf_asset_id"), r.get("sf_ban_can"),
+        r.get("msisdn"), r.get("sf_asset_id"), r.get("sf_ban_can"), r.get("sf_oli_id"),
         r.get("sf_provisioning"), r.get("sf_disc_reason"), r.get("sf_product"),
         r.get("sf_plan_name"), r.get("sf_asset_ref_id"), r.get("sf_root_item_id"),
         r.get("sf_last_modified"), r.get("sf_validation"), r.get("sf_field_to_review"),
@@ -745,10 +760,36 @@ def _insert_sf_asset_result(conn, run_id: int, r: dict):
 
 
 def _process_and_store(run_id: int, msisdn: str, counters: dict, lock, order_ban: str = None, order_reason: str = None, activated_date: str = None, oli_id: str = None) -> None:
+    import threading as _threading
+    import nokia_validator
     from aria_validator import process_single as aria_single
-    aria_results = aria_single(msisdn, activated_date=activated_date, order_ban=order_ban, oli_id=oli_id)  # list[dict]
-    mtx_r        = matrixx_validator.process_single(msisdn, order_ban=order_ban)
-    sf_r         = sf_asset_validator.process_single(msisdn, order_ban=order_ban, order_reason=order_reason)
+
+    # Run Aria first (sequential — drives OLI logic)
+    aria_results = aria_single(msisdn, activated_date=activated_date, order_ban=order_ban, oli_id=oli_id)
+
+    # Run Matrixx, SF, Nokia concurrently
+    mtx_r_box  = [None]
+    sf_r_box   = [None]
+    nok_r_box  = [None]
+
+    def _get_mtx():
+        mtx_r_box[0] = matrixx_validator.process_single(msisdn, order_ban=order_ban)
+
+    def _get_sf():
+        sf_r_box[0] = sf_asset_validator.process_single(msisdn, order_ban=order_ban, order_reason=order_reason)
+
+    def _get_nok():
+        nok_r_box[0] = nokia_validator.process_single(msisdn)
+
+    t1 = _threading.Thread(target=_get_mtx)
+    t2 = _threading.Thread(target=_get_sf)
+    t3 = _threading.Thread(target=_get_nok)
+    t1.start(); t2.start(); t3.start()
+    t1.join();  t2.join();  t3.join()
+
+    mtx_r = mtx_r_box[0]
+    sf_r  = sf_r_box[0]
+    nok_r = nok_r_box[0]
 
     conn = get_connection()
     try:
@@ -758,6 +799,7 @@ def _process_and_store(run_id: int, msisdn: str, counters: dict, lock, order_ban
 
         _insert_matrixx_result(conn, run_id, mtx_r)
         _insert_sf_asset_result(conn, run_id, sf_r)
+        _insert_nokia_result(conn, run_id, nok_r)
 
         # Counter at MSISDN level — worst status across all plan instances
         with lock:
@@ -1210,17 +1252,18 @@ def _build_excel_workbook(run, aria_results, mtx_results, sf_results):
     # ── Sheet 3: SF Asset
     ws3 = wb.create_sheet("SF Asset Validation")
     sf_headers = [
-        "MSISDN", "BAN-CAN", "Provisioning Status", "Disconnection Reason",
+        "MSISDN", "BAN-CAN", "OLI ID", "Provisioning Status", "Disconnection Reason",
         "Product", "Last Modified Date", "Asset ID", "Asset Ref ID", "Root Item ID",
         "Validation", "Fields to Review", "Error"
     ]
     style_headers(ws3, sf_headers)
     for row_idx, r in enumerate([dict(x) for x in sf_results], 2):
         vals = [
-            r.get("msisdn"), r.get("sf_ban_can"), r.get("sf_provisioning"),
-            r.get("sf_disc_reason"), r.get("sf_product"), r.get("sf_last_modified"),
-            r.get("sf_asset_id"), r.get("sf_asset_ref_id"), r.get("sf_root_item_id"),
-            r.get("sf_validation"), r.get("sf_field_to_review"), r.get("sf_error")
+            r.get("msisdn"), r.get("sf_ban_can"), r.get("sf_oli_id"),
+            r.get("sf_provisioning"), r.get("sf_disc_reason"), r.get("sf_product"),
+            r.get("sf_last_modified"), r.get("sf_asset_id"), r.get("sf_asset_ref_id"),
+            r.get("sf_root_item_id"), r.get("sf_validation"), r.get("sf_field_to_review"),
+            r.get("sf_error")
         ]
         for col, val in enumerate(vals, 1):
             ws3.cell(row=row_idx, column=col, value=val)
@@ -2578,11 +2621,14 @@ def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
                m.mtx_ban_can, m.mtx_subscription_status, m.mtx_plan_name,
                m.mtx_plan_status, m.mtx_resource_id,
                m.mtx_device_status, m.mtx_field_to_review, m.mtx_validation,
-               s.sf_ban_can, s.sf_provisioning, s.sf_disc_reason,
-               s.sf_plan_name, s.sf_field_to_review, s.sf_validation
+               s.sf_ban_can, s.sf_oli_id, s.sf_provisioning, s.sf_disc_reason,
+               s.sf_plan_name, s.sf_field_to_review, s.sf_validation,
+               n.nok_number_status, n.nok_sim_status, n.nok_iccid,
+               n.nok_imsi, n.nok_field_to_review, n.nok_validation
         FROM results r
         LEFT JOIN matrixx_results m  ON m.run_id = r.run_id AND m.msisdn = r.msisdn
         LEFT JOIN sf_asset_results s ON s.run_id = r.run_id AND s.msisdn = r.msisdn
+        LEFT JOIN nokia_results n    ON n.run_id = r.run_id AND n.msisdn = r.msisdn
         WHERE r.run_id = ?
         ORDER BY r.msisdn
     """, (run_id,)).fetchall()
@@ -2632,10 +2678,16 @@ def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
             "mtx_device_status":        r.get("mtx_device_status"),
             "mtx_field_to_review":      r.get("mtx_field_to_review"),
             "sf_ban_can":               r.get("sf_ban_can"),
+            "sf_oli_id":                r.get("sf_oli_id"),
             "sf_provisioning":          r.get("sf_provisioning"),
             "sf_disc_reason":           r.get("sf_disc_reason"),
             "sf_plan_name":             r.get("sf_plan_name"),
             "sf_field_to_review":       r.get("sf_field_to_review"),
+            "nok_number_status":        r.get("nok_number_status"),
+            "nok_sim_status":           r.get("nok_sim_status"),
+            "nok_iccid":                r.get("nok_iccid"),
+            "nok_imsi":                 r.get("nok_imsi"),
+            "nok_field_to_review":      r.get("nok_field_to_review"),
             "overall":                  overall,
             "combined_field_to_review": combined_field_to_review,
         })

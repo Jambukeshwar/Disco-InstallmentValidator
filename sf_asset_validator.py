@@ -40,6 +40,7 @@ def fetch_asset(msisdn: str) -> list[dict]:
         SELECT id,
                vlocity_cmt__BillingAccountId__r.PR_Mobile_Billing_Number__c,
                PR_MSISDN__c,
+               PR_Original_OLI_ID__c,
                vlocity_cmt__ProvisioningStatus__c,
                Disconnection_Reason__c,
                vlocity_cmt__AssetReferenceId__c,
@@ -50,6 +51,7 @@ def fetch_asset(msisdn: str) -> list[dict]:
         FROM asset
         WHERE PR_MSISDN__c = '{msisdn}'
           AND product2.name != 'SIM Card'
+          AND product2.vlocity_cmt__ParentClassCode__c LIKE '%Line%'
         ORDER BY CreatedDate DESC
     """
 
@@ -96,6 +98,7 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
         "msisdn":              msisdn,
         "sf_asset_id":         None,
         "sf_ban_can":          None,
+        "sf_oli_id":           None,
         "sf_provisioning":     None,
         "sf_disc_reason":      None,
         "sf_product":          None,
@@ -154,6 +157,7 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
 
         base["sf_asset_id"]      = rec.get("Id")
         base["sf_ban_can"]       = sf_ban
+        base["sf_oli_id"]        = rec.get("PR_Original_OLI_ID__c")
         base["sf_provisioning"]  = sf_status
         base["sf_disc_reason"]   = sf_reason
         base["sf_product"]       = product_name
