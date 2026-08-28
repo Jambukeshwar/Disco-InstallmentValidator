@@ -94,6 +94,7 @@ def init_db():
             mtx_plan_status TEXT,
             mtx_plan_charge TEXT,
             mtx_resource_id TEXT,
+            mtx_plan_activation_time TEXT,
             mtx_device_status TEXT,
             mtx_validation TEXT,
             mtx_field_to_review TEXT,
@@ -130,6 +131,8 @@ def init_db():
         c.execute("ALTER TABLE matrixx_results ADD COLUMN mtx_device_status TEXT")
     if "mtx_order_ban" not in existing_mtx:
         c.execute("ALTER TABLE matrixx_results ADD COLUMN mtx_order_ban TEXT")
+    if "mtx_plan_activation_time" not in existing_mtx:
+        c.execute("ALTER TABLE matrixx_results ADD COLUMN mtx_plan_activation_time TEXT")
 
     # Migrate sf_asset_results
     existing_sf = {row[1] for row in c.execute("PRAGMA table_info(sf_asset_results)")}

@@ -34,26 +34,27 @@ def fetch_device(msisdn: str) -> dict:
     return resp.json()
 
 
-def process_single(msisdn: str, order_ban: str = None) -> dict:
+def process_single(msisdn: str, order_ban: str = None, activated_date: str = None) -> dict:
     base = {
-        "msisdn":                   msisdn,
-        "mtx_order_ban":            order_ban,
-        "mtx_ban_can":              None,
-        "mtx_segment":              None,
-        "mtx_payment_pref":         None,
-        "mtx_usage_guide":          None,
-        "mtx_subscription":         None,
-        "mtx_subscription_id":      None,
-        "mtx_subscription_status":  None,
-        "mtx_plan_name":            None,
-        "mtx_plan_code":            None,
-        "mtx_plan_status":          None,
-        "mtx_plan_charge":          None,
-        "mtx_resource_id":          None,
-        "mtx_device_status":        None,
-        "mtx_validation":           None,
-        "mtx_field_to_review":      None,
-        "mtx_error":                None,
+        "msisdn":                    msisdn,
+        "mtx_order_ban":             order_ban,
+        "mtx_ban_can":               None,
+        "mtx_segment":               None,
+        "mtx_payment_pref":          None,
+        "mtx_usage_guide":           None,
+        "mtx_subscription":          None,
+        "mtx_subscription_id":       None,
+        "mtx_subscription_status":   None,
+        "mtx_plan_name":             None,
+        "mtx_plan_code":             None,
+        "mtx_plan_status":           None,
+        "mtx_plan_charge":           None,
+        "mtx_resource_id":           None,
+        "mtx_plan_activation_time":  None,
+        "mtx_device_status":         None,
+        "mtx_validation":            None,
+        "mtx_field_to_review":       None,
+        "mtx_error":                 None,
     }
 
     try:
@@ -115,11 +116,12 @@ def process_single(msisdn: str, order_ban: str = None) -> dict:
 
             if plan_offer:
                 offer_attr = plan_offer.get("Attr", {})
-                base["mtx_plan_name"]   = offer_attr.get("CommercialPlanName")
-                base["mtx_plan_code"]   = offer_attr.get("CommercialPlanCode")
-                base["mtx_plan_status"] = plan_offer.get("OfferStatusDescription")
-                base["mtx_plan_charge"] = offer_attr.get("TotalCharge")
-                base["mtx_resource_id"] = plan_offer.get("ResourceId")
+                base["mtx_plan_name"]           = offer_attr.get("CommercialPlanName")
+                base["mtx_plan_code"]           = offer_attr.get("CommercialPlanCode")
+                base["mtx_plan_status"]         = plan_offer.get("OfferStatusDescription")
+                base["mtx_plan_charge"]         = offer_attr.get("TotalCharge")
+                base["mtx_resource_id"]         = plan_offer.get("ResourceId")
+                base["mtx_plan_activation_time"] = plan_offer.get("ActivationTime")
             else:
                 base["mtx_plan_name"]   = "N/A"
                 base["mtx_plan_code"]   = "N/A"
@@ -152,7 +154,21 @@ def process_single(msisdn: str, order_ban: str = None) -> dict:
         if sub_status == "active":
             review.append("MTX_Subscription_Active")
         if plan_status == "active":
-            review.append("MTX_Plan_Active")
+            # If plan activated after the disconnect order date → possible reactivation
+            act_time = base.get("mtx_plan_activation_time")
+            flagged_reactivation = False
+            if activated_date and act_time:
+                try:
+                    from datetime import datetime
+                    act_dt = datetime.strptime(act_time[:19], "%Y-%m-%dT%H:%M:%S")
+                    ord_dt = datetime.strptime(activated_date[:19], "%Y-%m-%dT%H:%M:%S")
+                    if act_dt > ord_dt:
+                        review.append("MTX_Possible_Reactivation")
+                        flagged_reactivation = True
+                except Exception:
+                    pass
+            if not flagged_reactivation:
+                review.append("MTX_Plan_Active")
         if device_status == "active":
             review.append("MTX_Device_Status")
 

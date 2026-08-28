@@ -713,8 +713,9 @@ def _insert_matrixx_result(conn, run_id: int, r: dict):
             mtx_usage_guide, mtx_subscription, mtx_subscription_id,
             mtx_subscription_status, mtx_plan_name, mtx_plan_code,
             mtx_plan_status, mtx_plan_charge, mtx_resource_id,
-            mtx_device_status, mtx_validation, mtx_field_to_review, mtx_error
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            mtx_plan_activation_time, mtx_device_status,
+            mtx_validation, mtx_field_to_review, mtx_error
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         run_id,
         r.get("msisdn"), r.get("mtx_order_ban"), r.get("mtx_ban_can"),
@@ -723,6 +724,7 @@ def _insert_matrixx_result(conn, run_id: int, r: dict):
         r.get("mtx_subscription_status"), r.get("mtx_plan_name"),
         r.get("mtx_plan_code"), r.get("mtx_plan_status"),
         r.get("mtx_plan_charge"), r.get("mtx_resource_id"),
+        r.get("mtx_plan_activation_time"),
         r.get("mtx_device_status"),
         r.get("mtx_validation"), r.get("mtx_field_to_review"),
         r.get("mtx_error")
@@ -774,7 +776,7 @@ def _process_and_store(run_id: int, msisdn: str, counters: dict, lock, order_ban
     nok_r_box  = [None]
 
     def _get_mtx():
-        mtx_r_box[0] = matrixx_validator.process_single(msisdn, order_ban=order_ban)
+        mtx_r_box[0] = matrixx_validator.process_single(msisdn, order_ban=order_ban, activated_date=activated_date)
 
     def _get_sf():
         sf_r_box[0] = sf_asset_validator.process_single(msisdn, order_ban=order_ban, order_reason=order_reason)
@@ -1230,20 +1232,21 @@ def _build_excel_workbook(run, aria_results, mtx_results, sf_results, nok_result
     # ── Sheet 2: Matrixx
     ws2 = wb.create_sheet("Matrixx Validation")
     mtx_headers = [
-        "MSISDN", "BAN-CAN", "Segment", "Payment Pref", "Usage Guide",
+        "MSISDN", "Order BAN-CAN", "BAN-CAN", "Segment", "Payment Pref", "Usage Guide",
         "Subscription", "Subscription ID", "Subscription Status",
         "Plan Name", "Plan Code", "Plan Status", "Plan Charge",
-        "Resource ID", "Validation", "Fields to Review", "Error"
+        "Resource ID", "Plan Activation Time", "Validation", "Fields to Review", "Error"
     ]
     style_headers(ws2, mtx_headers)
     for row_idx, r in enumerate([dict(x) for x in mtx_results], 2):
         vals = [
-            r.get("msisdn"), r.get("mtx_ban_can"), r.get("mtx_segment"),
-            r.get("mtx_payment_pref"), r.get("mtx_usage_guide"),
+            r.get("msisdn"), r.get("mtx_order_ban"), r.get("mtx_ban_can"),
+            r.get("mtx_segment"), r.get("mtx_payment_pref"), r.get("mtx_usage_guide"),
             r.get("mtx_subscription"), r.get("mtx_subscription_id"),
             r.get("mtx_subscription_status"), r.get("mtx_plan_name"),
             r.get("mtx_plan_code"), r.get("mtx_plan_status"),
             r.get("mtx_plan_charge"), r.get("mtx_resource_id"),
+            r.get("mtx_plan_activation_time"),
             r.get("mtx_validation"), r.get("mtx_field_to_review"), r.get("mtx_error")
         ]
         for col, val in enumerate(vals, 1):
@@ -2654,7 +2657,8 @@ def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
                r.field_to_review AS aria_field_to_review, r.validation AS aria_validation,
                m.mtx_ban_can, m.mtx_subscription_status, m.mtx_plan_name,
                m.mtx_plan_status, m.mtx_resource_id,
-               m.mtx_device_status, m.mtx_field_to_review, m.mtx_validation,
+               m.mtx_plan_activation_time, m.mtx_device_status,
+               m.mtx_field_to_review, m.mtx_validation,
                s.sf_ban_can, s.sf_oli_id, s.sf_provisioning, s.sf_disc_reason,
                s.sf_plan_name, s.sf_field_to_review, s.sf_validation,
                n.nok_number_status, n.nok_sim_status, n.nok_iccid,
@@ -2705,12 +2709,13 @@ def agent_disconnect_validate(req: AgentDisconnectRequest, request: Request):
             "aria_status_summary":      r.get("aria_status_summary"),
             "aria_field_to_review":     r.get("aria_field_to_review"),
             "mtx_ban_can":              r.get("mtx_ban_can"),
-            "mtx_subscription_status":  r.get("mtx_subscription_status"),
-            "mtx_plan_name":            r.get("mtx_plan_name"),
-            "mtx_plan_status":          r.get("mtx_plan_status"),
-            "mtx_resource_id":          r.get("mtx_resource_id"),
-            "mtx_device_status":        r.get("mtx_device_status"),
-            "mtx_field_to_review":      r.get("mtx_field_to_review"),
+            "mtx_subscription_status":   r.get("mtx_subscription_status"),
+            "mtx_plan_name":             r.get("mtx_plan_name"),
+            "mtx_plan_status":           r.get("mtx_plan_status"),
+            "mtx_resource_id":           r.get("mtx_resource_id"),
+            "mtx_plan_activation_time":  r.get("mtx_plan_activation_time"),
+            "mtx_device_status":         r.get("mtx_device_status"),
+            "mtx_field_to_review":       r.get("mtx_field_to_review"),
             "sf_ban_can":               r.get("sf_ban_can"),
             "sf_oli_id":                r.get("sf_oli_id"),
             "sf_provisioning":          r.get("sf_provisioning"),
