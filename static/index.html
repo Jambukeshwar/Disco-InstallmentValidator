@@ -2246,7 +2246,8 @@
         if(c.key==='nso_exist'){const cls=v==='Yes'?'cell-ok':v==='No'?'cell-err':'cell-na';return `<td class="${cls}">${v}</td>`;}
         return `<td title="${v}">${v}</td>`;
       }).join('');
-      return `<tr onclick="openDetailModal('${r.msisdn}')" title="Click to view details & actions">${cells}</tr>`;
+      const iid=(r.client_plan_instance_id||'').replace(/'/g,"\\'");
+      return `<tr onclick="openDetailModal('${r.msisdn}','${iid}')" title="Click to view details & actions">${cells}</tr>`;
     }).join('');
     wrap.innerHTML=`<table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
   }
@@ -2337,8 +2338,13 @@
   function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3500);}
 
   // ── Detail modal ─────────────────────────────────────────────────────────
-  function openDetailModal(msisdn){
-    _detailRow=allResults.find(r=>r.msisdn===msisdn)||null;
+  function openDetailModal(msisdn, instanceId){
+    // When instanceId is given, find the exact Aria row (handles duplicate MSISDNs)
+    if(instanceId){
+      _detailRow=allResults.find(r=>r.client_plan_instance_id===instanceId)||null;
+    } else {
+      _detailRow=allResults.find(r=>r.msisdn===msisdn)||null;
+    }
     _detailMtx=allMatrixxResults.find(r=>r.msisdn===msisdn)||null;
     _detailSF=allSFAssetResults.find(r=>r.msisdn===msisdn)||null;
     if(!_detailRow&&!_detailMtx&&!_detailSF)return;

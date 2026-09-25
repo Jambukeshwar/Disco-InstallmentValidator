@@ -28,62 +28,110 @@ SMTP_SUBJECT_PREFIX = os.getenv("SMTP_SUBJECT_PREFIX", "Disconnect Validation Su
 def build_html_body(date_label: str, aria_list: list, mtx_list: list, sf_list: list) -> str:
     records = len(aria_list)
 
-    # Group plan instances by MSISDN for MSISDN-level summary
     from collections import defaultdict
-    msisdn_plans = defaultdict(list)
+
+    def _has_action(field_to_review: str) -> bool:
+        return any(
+            f.strip() and f.strip() != "No_Action_Required"
+            for f in (field_to_review or "").split("|")
+        )
+
+    # Group Aria plan instances by MSISDN (multiple plans per MSISDN possible)
+    msisdn_aria = defaultdict(list)
     for r in aria_list:
-        msisdn_plans[r.get("msisdn")].append(r)
+        msisdn_aria[r.get("msisdn")].append(r)
 
-    total = len(msisdn_plans)  # unique MSISDNs
-    # MSISDN is clean only if ALL its plan instances are ✅
-    clean = sum(1 for plans in msisdn_plans.values() if all(p.get("validation") == "✅" for p in plans))
-    # MSISDN needs action if ANY plan instance is ⚠️
-    warn  = sum(1 for plans in msisdn_plans.values() if any(p.get("validation") == "⚠️" for p in plans))
-    err   = sum(1 for plans in msisdn_plans.values() if any(p.get("validation") not in ("✅", "⚠️") and p.get("validation") for p in plans))
+    msisdn_mtx = {r.get("msisdn"): r for r in mtx_list}
+    msisdn_sf  = {r.get("msisdn"): r for r in sf_list}
 
-    systems = [
-        ("🔵 Aria",     aria_list, "validation"),
-        ("🟠 Matrixx",  mtx_list,  "mtx_validation"),
-        ("🟢 SF Asset", sf_list,   "sf_validation"),
-    ]
+    # All unique MSISDNs across all systems
+    all_msisdns = set(msisdn_aria.keys()) | set(msisdn_mtx.keys()) | set(msisdn_sf.keys())
+    total = len(all_msisdns)
 
-    flag_counter = Counter()
-    for lst, key in [
-        (aria_list, "field_to_review"),
-        (mtx_list,  "mtx_field_to_review"),
-        (sf_list,   "sf_field_to_review"),
-    ]:
+    clean = warn = err = 0
+    for m in all_msisdns:
+        aria_plans = msisdn_aria.get(m, [])
+        mtx_row    = msisdn_mtx.get(m, {})
+        sf_row     = msisdn_sf.get(m, {})
+
+        has_error = (
+            any(p.get("error_msg") for p in aria_plans) or
+            bool(mtx_row.get("mtx_error")) or
+            bool(sf_row.get("sf_error"))
+        )
+        has_action = (
+            any(_has_action(p.get("field_to_review")) for p in aria_plans) or
+            _has_action(mtx_row.get("mtx_field_to_review")) or
+            _has_action(sf_row.get("sf_field_to_review"))
+        )
+
+        if has_error:
+            err += 1
+        elif has_action:
+            warn += 1
+        else:
+            clean += 1
+
+    def _combo_rows(lst, ftr_key, tag_bg, tag_fg):
+        """Build HTML table rows for field_to_review combination counts."""
+        combo_counter = Counter()
         for r in lst:
-            for f in (r.get(key) or "").split("|"):
-                f = f.strip()
-                if f and f not in ("No_Action_Required", "BANCAN_Mismatch"):
-                    flag_counter[f] += 1
+            ftr = (r.get(ftr_key) or "").strip()
+            if ftr and ftr != "No_Action_Required" and "BANCAN_Mismatch" not in ftr:
+                combo_counter[ftr] += 1
 
-    # Per-system rows
-    sys_rows = ""
-    for name, lst, vk in systems:
-        sc = sum(1 for r in lst if r.get(vk) == "✅")
-        sw = sum(1 for r in lst if r.get(vk) == "⚠️")
-        se = sum(1 for r in lst if r.get(vk) not in ("✅", "⚠️") and r.get(vk))
-        sys_rows += f"""
-            <tr>
-              <td style="padding:10px 16px;border-bottom:1px solid #2d333b;font-weight:600;color:#e6edf3">{name}</td>
-              <td style="padding:10px 16px;border-bottom:1px solid #2d333b;text-align:center;color:#4caf50;font-weight:700;font-size:16px">{sc}</td>
-              <td style="padding:10px 16px;border-bottom:1px solid #2d333b;text-align:center;color:#ffaa00;font-weight:700;font-size:16px">{sw}</td>
-              <td style="padding:10px 16px;border-bottom:1px solid #2d333b;text-align:center;color:#f44336;font-weight:700;font-size:16px">{se}</td>
-            </tr>"""
+        if not combo_counter:
+            return '<tr><td colspan="2" style="padding:14px 16px;color:#4caf50;text-align:center">✅ All records clean</td></tr>'
 
-    # Top flags rows
-    flag_rows = ""
-    if flag_counter:
-        for flag, count in flag_counter.most_common(10):
-            flag_rows += f"""
-            <tr>
-              <td style="padding:9px 16px;border-bottom:1px solid #2d333b;color:#e6edf3">{flag}</td>
-              <td style="padding:9px 16px;border-bottom:1px solid #2d333b;text-align:center;font-weight:700;color:#ffaa00">{count}</td>
-            </tr>"""
-    else:
-        flag_rows = '<tr><td colspan="2" style="padding:14px 16px;color:#4caf50;text-align:center">✅ No flags — all records clean</td></tr>'
+        rows = ""
+        for combo, count in combo_counter.most_common():
+            flags = [f.strip() for f in combo.split("|")]
+            tags_html = ""
+            for i, flag in enumerate(flags):
+                if i > 0:
+                    tags_html += '<span style="color:#4d5663;font-size:12px;margin:0 2px">|</span>'
+                tags_html += (
+                    f'<span style="display:inline-block;font-size:11px;padding:2px 7px;'
+                    f'border-radius:4px;font-weight:600;background:{tag_bg};color:{tag_fg}">{flag}</span>'
+                )
+            rows += (
+                f'<tr>'
+                f'<td style="padding:10px 16px;border-bottom:1px solid #2d333b">{tags_html}</td>'
+                f'<td style="padding:10px 16px;border-bottom:1px solid #2d333b;text-align:center;'
+                f'font-weight:700;color:#ffaa00;font-size:15px;white-space:nowrap">{count}</td>'
+                f'</tr>'
+            )
+        return rows
+
+    def _sys_section(label, lst, ftr_key, val_key, tag_bg, tag_fg):
+        sc = sum(1 for r in lst if r.get(val_key) == "✅")
+        sw = sum(1 for r in lst if r.get(val_key) == "⚠️")
+        se = sum(1 for r in lst if r.get(val_key) not in ("✅", "⚠️") and r.get(val_key))
+        rows = _combo_rows(lst, ftr_key, tag_bg, tag_fg)
+        sub = (
+            f'<span style="color:#4caf50;font-size:11px;font-weight:400">{sc} ✅</span>'
+            f'&nbsp;&nbsp;'
+            f'<span style="color:#ffaa00;font-size:11px;font-weight:400">{sw} ⚠️</span>'
+            f'&nbsp;&nbsp;'
+            f'<span style="color:#f44336;font-size:11px;font-weight:400">{se} ❌</span>'
+        )
+        return f"""
+        <tr><td style="padding:20px 24px 8px">
+          <div style="font-size:11px;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:14px">
+            {label} &nbsp; {sub}
+          </div>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2128;border-radius:8px;border:1px solid #30363d;overflow:hidden">
+            <tr style="background:#21262d">
+              <th style="padding:10px 16px;text-align:left;font-size:11px;color:#8b949e;font-weight:600;text-transform:uppercase">Field to Review</th>
+              <th style="padding:10px 16px;text-align:center;font-size:11px;color:#8b949e;font-weight:600;text-transform:uppercase;width:70px">Count</th>
+            </tr>
+            {rows}
+          </table>
+        </td></tr>"""
+
+    aria_section = _sys_section("🔵 Aria Validation",     aria_list, "field_to_review",         "validation",     "#1a2d3d", "#79b8ff")
+    mtx_section  = _sys_section("🟠 Matrixx Validation",  mtx_list,  "mtx_field_to_review",      "mtx_validation", "#2d2200", "#ffcc40")
+    sf_section   = _sys_section("🟢 SF Asset Validation", sf_list,   "sf_field_to_review",        "sf_validation",  "#1a2d1a", "#81c784")
 
     return f"""<!DOCTYPE html>
 <html>
@@ -142,31 +190,10 @@ def build_html_body(date_label: str, aria_list: list, mtx_list: list, sf_list: l
           </table>
         </td></tr>
 
-        <!-- Per System Breakdown -->
-        <tr><td style="padding:20px 24px 8px">
-          <div style="font-size:11px;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:14px">Per System Breakdown</div>
-          <table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2128;border-radius:8px;border:1px solid #30363d;overflow:hidden">
-            <tr style="background:#21262d">
-              <th style="padding:10px 16px;text-align:left;font-size:11px;color:#8b949e;font-weight:600;text-transform:uppercase">System</th>
-              <th style="padding:10px 16px;text-align:center;font-size:11px;color:#4caf50;font-weight:600;text-transform:uppercase">Clean</th>
-              <th style="padding:10px 16px;text-align:center;font-size:11px;color:#ffaa00;font-weight:600;text-transform:uppercase">Action Needed</th>
-              <th style="padding:10px 16px;text-align:center;font-size:11px;color:#f44336;font-weight:600;text-transform:uppercase">Errors</th>
-            </tr>
-            {sys_rows}
-          </table>
-        </td></tr>
-
-        <!-- Top Flags -->
-        <tr><td style="padding:20px 24px 8px">
-          <div style="font-size:11px;font-weight:700;color:#8b949e;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:14px">Top Flags</div>
-          <table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2128;border-radius:8px;border:1px solid #30363d;overflow:hidden">
-            <tr style="background:#21262d">
-              <th style="padding:10px 16px;text-align:left;font-size:11px;color:#8b949e;font-weight:600;text-transform:uppercase">Flag</th>
-              <th style="padding:10px 16px;text-align:center;font-size:11px;color:#8b949e;font-weight:600;text-transform:uppercase">Count</th>
-            </tr>
-            {flag_rows}
-          </table>
-        </td></tr>
+        <!-- Per System Sections -->
+        {aria_section}
+        {mtx_section}
+        {sf_section}
 
         <!-- Footer -->
         <tr><td style="padding:20px 24px 24px">
