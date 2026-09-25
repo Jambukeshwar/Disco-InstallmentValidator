@@ -28,7 +28,8 @@ echo "Starting container..."
 podman run -d \
   --name $CONTAINER \
   -p 8001:8001 \
-  --memory 600m \
+  --memory 1g \
+  --restart always \
   -v "$APP_DIR/.env:/app/.env:Z,ro" \
   -v "$APP_DIR/auth_data.json:/app/auth_data.json:Z" \
   -v "$APP_DIR/pkce_state.json:/app/pkce_state.json:Z" \
