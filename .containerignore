@@ -1,0 +1,11 @@
+.env
+auth_data.json
+pkce_state.json
+*.db
+venv/
+__pycache__/
+*.pyc
+.git/
+*.xlsx
+*.docx
+*.log
