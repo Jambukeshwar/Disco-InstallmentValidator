@@ -30,9 +30,11 @@ def build_html_body(date_label: str, aria_list: list, mtx_list: list, sf_list: l
 
     from collections import defaultdict
 
+    _NON_ACTION_FLAGS = {"No_Action_Required", "Possible_reactivation", "MTX_Possible_Reactivation"}
+
     def _has_action(field_to_review: str) -> bool:
         return any(
-            f.strip() and f.strip() != "No_Action_Required"
+            f.strip() and f.strip() not in _NON_ACTION_FLAGS
             for f in (field_to_review or "").split("|")
         )
 
@@ -72,10 +74,12 @@ def build_html_body(date_label: str, aria_list: list, mtx_list: list, sf_list: l
         else:
             clean += 1
 
-    def _combo_rows(lst, ftr_key, tag_bg, tag_fg):
-        """Build HTML table rows for field_to_review combination counts."""
+    def _combo_rows(lst, ftr_key, val_key, tag_bg, tag_fg):
+        """Build HTML table rows for field_to_review combination counts (⚠️ only)."""
         combo_counter = Counter()
         for r in lst:
+            if r.get(val_key) != "⚠️":
+                continue
             ftr = (r.get(ftr_key) or "").strip()
             if ftr and ftr != "No_Action_Required" and "BANCAN_Mismatch" not in ftr:
                 combo_counter[ftr] += 1
@@ -107,7 +111,7 @@ def build_html_body(date_label: str, aria_list: list, mtx_list: list, sf_list: l
         sc = sum(1 for r in lst if r.get(val_key) == "✅")
         sw = sum(1 for r in lst if r.get(val_key) == "⚠️")
         se = sum(1 for r in lst if r.get(val_key) not in ("✅", "⚠️") and r.get(val_key))
-        rows = _combo_rows(lst, ftr_key, tag_bg, tag_fg)
+        rows = _combo_rows(lst, ftr_key, val_key, tag_bg, tag_fg)
         sub = (
             f'<span style="color:#4caf50;font-size:11px;font-weight:400">{sc} ✅</span>'
             f'&nbsp;&nbsp;'
