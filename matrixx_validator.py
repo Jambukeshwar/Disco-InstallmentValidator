@@ -159,9 +159,27 @@ def process_single(msisdn: str, order_ban: str = None, activated_date: str = Non
             flagged_reactivation = False
             if activated_date and act_time:
                 try:
-                    from datetime import datetime
-                    act_dt = datetime.strptime(act_time[:19], "%Y-%m-%dT%H:%M:%S")
-                    ord_dt = datetime.strptime(activated_date[:19], "%Y-%m-%dT%H:%M:%S")
+                    from datetime import datetime, timezone
+                    import re
+
+                    def _to_utc(ts: str) -> datetime:
+                        ts = ts.strip()
+                        # Replace trailing Z with +00:00 for fromisoformat compatibility
+                        ts = re.sub(r'Z$', '+00:00', ts)
+                        # Python 3.7+ fromisoformat handles offsets like +0000 only with colon
+                        ts = re.sub(r'([+-])(\d{2})(\d{2})$', r'\1\2:\3', ts)
+                        # Remove sub-second precision beyond 6 digits
+                        ts = re.sub(r'(\.\d{6})\d+', r'\1', ts)
+                        try:
+                            dt = datetime.fromisoformat(ts)
+                        except ValueError:
+                            # Fallback: strip timezone and assume UTC
+                            dt = datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                        # Normalise to UTC
+                        return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+                    act_dt = _to_utc(act_time)
+                    ord_dt = _to_utc(activated_date)
                     if act_dt > ord_dt:
                         review.append("MTX_Possible_Reactivation")
                         flagged_reactivation = True
@@ -176,7 +194,8 @@ def process_single(msisdn: str, order_ban: str = None, activated_date: str = Non
             review.append("No_Action_Required")
 
         base["mtx_field_to_review"] = "|".join(review)
-        base["mtx_validation"]      = "✅" if "No_Action_Required" in review else "⚠️"
+        is_clean = "No_Action_Required" in review or "MTX_Possible_Reactivation" in review
+        base["mtx_validation"]      = "✅" if is_clean else "⚠️"
 
         return base
 

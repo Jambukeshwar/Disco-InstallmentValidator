@@ -85,7 +85,7 @@ def _extract_ban(record: dict) -> str:
     return "N/A"
 
 
-def process_single(msisdn: str, order_ban: str = None, order_reason: str = None) -> dict:
+def process_single(msisdn: str, order_ban: str = None, order_reason: str = None, activated_date: str = None) -> dict:
     """
     Fetch SF asset for one MSISDN and validate.
 
@@ -178,14 +178,39 @@ def process_single(msisdn: str, order_ban: str = None, order_reason: str = None)
                 return base
 
         # Provisioning status check
+        possible_reactivation = False
         if sf_status.lower() not in CLEAN_STATUSES:
-            review.append("SF_Asset_Status")
+            if activated_date and base.get("sf_last_modified"):
+                try:
+                    import re
+                    from datetime import datetime, timezone
+
+                    def _to_utc(ts: str) -> datetime:
+                        ts = re.sub(r'Z$', '+00:00', ts.strip())
+                        ts = re.sub(r'([+-])(\d{2})(\d{2})$', r'\1\2:\3', ts)
+                        ts = re.sub(r'(\.\d{6})\d+', r'\1', ts)
+                        try:
+                            dt = datetime.fromisoformat(ts)
+                        except ValueError:
+                            dt = datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                        return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+                    mod_dt = _to_utc(base["sf_last_modified"])
+                    ord_dt = _to_utc(activated_date)
+                    if mod_dt > ord_dt:
+                        review.append("SF_Possible_Reactivation")
+                        possible_reactivation = True
+                except Exception:
+                    pass
+            if not possible_reactivation:
+                review.append("SF_Asset_Status")
 
         if not review:
             review.append("No_Action_Required")
 
         base["sf_field_to_review"] = "|".join(review)
-        base["sf_validation"]      = "✅" if "No_Action_Required" in review else "⚠️"
+        is_clean = "No_Action_Required" in review or possible_reactivation
+        base["sf_validation"]      = "✅" if is_clean else "⚠️"
 
         return base
 

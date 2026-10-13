@@ -93,6 +93,9 @@ class RunRequest(BaseModel):
 class ManualRunRequest(BaseModel):
     msisdns: list[str]
 
+class OrderIDRunRequest(BaseModel):
+    order_ids: list[str]
+
 class OrderValidatorRequest(BaseModel):
     date_from:   str = ""
     date_to:     str = ""
@@ -779,7 +782,7 @@ def _process_and_store(run_id: int, msisdn: str, counters: dict, lock, order_ban
         mtx_r_box[0] = matrixx_validator.process_single(msisdn, order_ban=order_ban, activated_date=activated_date)
 
     def _get_sf():
-        sf_r_box[0] = sf_asset_validator.process_single(msisdn, order_ban=order_ban, order_reason=order_reason)
+        sf_r_box[0] = sf_asset_validator.process_single(msisdn, order_ban=order_ban, order_reason=order_reason, activated_date=activated_date)
 
     def _get_nok():
         nok_r_box[0] = nokia_validator.process_single(msisdn)
@@ -964,6 +967,93 @@ def create_manual_run(req: ManualRunRequest, background_tasks: BackgroundTasks, 
     conn.close()
 
     background_tasks.add_task(do_manual_run, run_id, msisdn_list)
+    return {"run_id": run_id, "status": "running"}
+
+
+def do_order_id_run(run_id: int, order_ids: list):
+    conn = get_connection()
+    try:
+        ids_csv = ",".join(f"'{oid}'" for oid in order_ids)
+        soql = (
+            "SELECT id, product2.name, PR_MSISDN__c, PR_Original_OLI_ID__c, "
+            "vlocity_cmt__BillingAccountId__r.PR_Mobile_Billing_Number__c, "
+            "order.account.name, order.OrderNumber, LastModifiedDate, "
+            "orderid, B2C_Device_Name__c, order.ActivatedDate, "
+            "order.vlocity_cmt__Reason__c, order.CreatedDate, "
+            "order.vlocity_cmt__OrderStatus__c "
+            "FROM orderitem "
+            "WHERE product2.name != 'Sim Card' "
+            "AND PR_MSISDN__c != Null "
+            f"AND OrderId IN ({ids_csv}) "
+            "ORDER BY order.OrderNumber DESC"
+        )
+        sf_records = run_soql_query(soql)
+
+        order_meta = {}
+        for r in sf_records:
+            m = r.get("PR_MSISDN__c", "").strip()
+            if not m:
+                continue
+            billing        = r.get("vlocity_cmt__BillingAccountId__r") or {}
+            ban            = billing.get("PR_Mobile_Billing_Number__c") if isinstance(billing, dict) else None
+            order          = r.get("Order") or r.get("order") or {}
+            reason         = order.get("vlocity_cmt__Reason__c") if isinstance(order, dict) else None
+            activated_date = order.get("ActivatedDate") if isinstance(order, dict) else None
+            oli_id         = r.get("PR_Original_OLI_ID__c")
+            order_meta[m]  = {"ban": ban, "reason": reason, "activated_date": activated_date, "oli_id": oli_id}
+
+        msisdn_list = list(order_meta.keys())
+        conn.execute("UPDATE runs SET total_count = ? WHERE id = ?", (len(msisdn_list), run_id))
+        conn.commit()
+
+        if not msisdn_list:
+            conn.execute(
+                "UPDATE runs SET status = 'completed', finished_at = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat(), run_id)
+            )
+            conn.commit()
+            return
+
+        counters = _run_concurrent(run_id, msisdn_list, max_workers=3, order_meta=order_meta)
+        success, warns, errors = counters["success"], counters["warns"], counters["errors"]
+
+        final_status = 'stopped' if _stop_flags.get(run_id) else 'completed'
+        conn.execute("""
+            UPDATE runs SET status = ?, finished_at = ?,
+            success_count = ?, warn_count = ?, error_count = ? WHERE id = ?
+        """, (final_status, datetime.now(timezone.utc).isoformat(), success, warns, errors, run_id))
+        conn.commit()
+
+    except Exception as e:
+        conn.execute(
+            "UPDATE runs SET status = 'failed', finished_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), run_id)
+        )
+        conn.commit()
+        print(f"Order ID run {run_id} failed: {e}")
+    finally:
+        trim_old_runs(conn)
+        conn.close()
+
+
+@app.post("/api/runs/by-order")
+def create_order_id_run(req: OrderIDRunRequest, background_tasks: BackgroundTasks, request: Request):
+    require_session(request)
+    order_ids = [o.strip() for o in req.order_ids if o.strip()]
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="No Order IDs provided")
+
+    label = order_ids[0] if len(order_ids) == 1 else f"{len(order_ids)} orders"
+    conn = get_connection()
+    cur = conn.execute(
+        "INSERT INTO runs (triggered_at, date_from, date_to, status, source) VALUES (?,?,?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), label, label, "running", "order_id")
+    )
+    run_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    background_tasks.add_task(do_order_id_run, run_id, order_ids)
     return {"run_id": run_id, "status": "running"}
 
 

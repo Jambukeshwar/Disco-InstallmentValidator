@@ -356,8 +356,9 @@
     <!-- ── Disconnect Validator controls ── -->
     <div id="disconnect-wrap" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;flex:1">
       <div class="mode-tabs" style="margin:0">
-        <button class="mode-tab active" id="tab-sf"     onclick="setMode('sf')">☁ SF Run</button>
-        <button class="mode-tab"        id="tab-manual" onclick="setMode('manual')">✏ Manual Run</button>
+        <button class="mode-tab active" id="tab-sf"       onclick="setMode('sf')">☁ SF Run</button>
+        <button class="mode-tab"        id="tab-manual"   onclick="setMode('manual')">✏ Manual Run (MSISDN)</button>
+        <button class="mode-tab"        id="tab-orderid"  onclick="setMode('orderid')">✏ Manual Run (Order ID)</button>
       </div>
       <div class="date-group" id="sf-wrap">
         <div class="field-wrap">
@@ -1767,8 +1768,19 @@
     currentMode=mode;
     document.getElementById('tab-sf').classList.toggle('active',mode==='sf');
     document.getElementById('tab-manual').classList.toggle('active',mode==='manual');
+    document.getElementById('tab-orderid').classList.toggle('active',mode==='orderid');
     document.getElementById('sf-wrap').style.display=mode==='sf'?'flex':'none';
-    document.getElementById('manual-wrap').classList.toggle('visible',mode==='manual');
+    const isManual=mode==='manual'||mode==='orderid';
+    document.getElementById('manual-wrap').classList.toggle('visible',isManual);
+    if(mode==='orderid'){
+      document.querySelector('#manual-wrap .topbar-label').textContent='Order IDs — one per line or comma separated';
+      document.getElementById('msisdn-input').placeholder='e.g. 801Pl00001yRxvNIAS\n801Pl00001AbcXYZIAS';
+      document.getElementById('msisdn-hint').textContent='0 order IDs entered';
+    } else {
+      document.querySelector('#manual-wrap .topbar-label').textContent='MSISDNs — one per line or comma separated';
+      document.getElementById('msisdn-input').placeholder='e.g. 18681234567\n18689876543';
+      document.getElementById('msisdn-hint').textContent='0 numbers entered';
+    }
   }
 
   let _nsoCurrentRunId=null, _nsoPoller=null, _nsoMode='sf';
@@ -2106,7 +2118,8 @@
     if(!runs.length){el.innerHTML='<div class="no-runs">No runs yet</div>';return;}
     el.innerHTML=runs.map(r=>{
       const isM=r.date_from==='manual';
-      const lbl=isM?`✏ Manual (${r.total_count} MSISDNs)`:`${r.date_from} ${r.time_from||'00:00'} → ${r.date_to} ${r.time_to||'23:59'}`;
+      const isO=r.source==='order_id';
+      const lbl=isO?`🔖 Order: ${r.date_from}`:isM?`✏ Manual (${r.total_count} MSISDNs)`:`${r.date_from} ${r.time_from||'00:00'} → ${r.date_to} ${r.time_to||'23:59'}`;
       return `<div class="run-item ${r.id===currentRunId?'active':''}" onclick="loadRun(${r.id})">
         <div class="run-item-dates">${lbl}</div>
         <div class="run-item-meta"><span class="run-item-time">${formatTime(r.triggered_at)}</span><span class="badge badge-${r.status}">${r.status}</span></div>
@@ -2123,10 +2136,14 @@
       if(!df||!dt){showToast('⚠️ Please select both dates');return;}
       if(df>dt||(df===dt&&tf>=tt)){showToast('⚠️ From datetime must be before To datetime');return;}
       endpoint='/api/runs';body={date_from:df,time_from:tf,date_to:dt,time_to:tt};toastMsg='🚀 Salesforce validation started';
-    }else{
+    }else if(currentMode==='manual'){
       const nums=parseMSISDNs(document.getElementById('msisdn-input').value);
       if(!nums.length){showToast('⚠️ Enter at least one valid MSISDN');return;}
       endpoint='/api/runs/manual';body={msisdns:nums};toastMsg=`🚀 Validating ${nums.length} MSISDN${nums.length>1?'s':''}`;
+    }else{
+      const oids=(document.getElementById('msisdn-input').value||'').split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);
+      if(!oids.length){showToast('⚠️ Enter at least one Order ID');return;}
+      endpoint='/api/runs/by-order';body={order_ids:oids};toastMsg=`🚀 Validating ${oids.length} Order ID${oids.length>1?'s':''}`;
     }
     document.getElementById('run-btn').disabled=true;
     document.getElementById('stop-btn').style.display='inline-block';

@@ -30,7 +30,7 @@ def build_html_body(date_label: str, aria_list: list, mtx_list: list, sf_list: l
 
     from collections import defaultdict
 
-    _NON_ACTION_FLAGS = {"No_Action_Required", "Possible_reactivation", "MTX_Possible_Reactivation"}
+    _NON_ACTION_FLAGS = {"No_Action_Required", "Possible_reactivation", "MTX_Possible_Reactivation", "SF_Possible_Reactivation"}
 
     def _has_action(field_to_review: str) -> bool:
         return any(
@@ -57,14 +57,14 @@ def build_html_body(date_label: str, aria_list: list, mtx_list: list, sf_list: l
         sf_row     = msisdn_sf.get(m, {})
 
         has_error = (
-            any(p.get("error_msg") for p in aria_plans) or
-            bool(mtx_row.get("mtx_error")) or
-            bool(sf_row.get("sf_error"))
+            any(p.get("validation") == "❌" for p in aria_plans) or
+            mtx_row.get("mtx_validation") == "❌" or
+            sf_row.get("sf_validation") == "❌"
         )
         has_action = (
-            any(_has_action(p.get("field_to_review")) for p in aria_plans) or
-            _has_action(mtx_row.get("mtx_field_to_review")) or
-            _has_action(sf_row.get("sf_field_to_review"))
+            any(p.get("validation") == "⚠️" for p in aria_plans) or
+            mtx_row.get("mtx_validation") == "⚠️" or
+            sf_row.get("sf_validation") == "⚠️"
         )
 
         if has_error:
