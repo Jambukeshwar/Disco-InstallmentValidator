@@ -178,8 +178,7 @@ def parse_order_records(raw_records: list) -> tuple:
                     # Both have installments — ChangePlan comparison
                     changeplan_pairs.append({"disconnect": disc, "add": add})
                 else:
-                    # Old device had no installment — validate Add only
-                    single_records.append(add)
+                    changeplan_pairs.append({"disconnect": disc, "add": add})
             else:
                 # Add OLI has no installment — store with reason
                 skipped_records.append(_skipped(add, "Skipped - No Installment on Add OLI"))
@@ -301,6 +300,29 @@ def process_changeplan_order(pair: dict):
 
     no_aria = {"aria_oli": None, "aria_bancan": None, "aria_installment_id": None,
                "aria_plan_name": None, "device_amount": None, "monthly_amount": None}
+
+    disc_contract = (disc_rec.get("contract_term") or "").strip()
+    disc_inst_id  = (disc_rec.get("sf_installment_id") or "").strip()
+    if disc_rec.get("segment") == "B2B":
+        disc_has_inst = bool(disc_inst_id)
+    else:
+        disc_has_inst = bool(disc_contract) and disc_contract != "No Commit Retail Price"
+
+    if not disc_has_inst:
+        add_aria = check_aria_full(add_oli) if add_oli else {"aria_found": False}
+        if add_aria["aria_found"]:
+            return {**base,
+                    "aria_oli":            add_aria.get("aria_oli"),
+                    "aria_bancan":         add_aria.get("aria_bancan"),
+                    "aria_installment_id": add_aria.get("aria_installment_id"),
+                    "aria_plan_name":      add_aria.get("aria_plan_name"),
+                    "device_amount":       add_aria.get("device_amount"),
+                    "monthly_amount":      add_aria.get("monthly_amount"),
+                    "validation":          "⚠️",
+                    "match_status":        "Installment Created on Change Plan - Disconnect Had None",
+                    "error":               None}
+        return {**base, **no_aria,
+                "validation": "✅", "match_status": "Clean", "error": None}
 
     if not disc_oli:
         return {**base, **no_aria,
