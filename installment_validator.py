@@ -173,15 +173,10 @@ def parse_order_records(raw_records: list) -> tuple:
         add  = next((r for r in recs if r["action"] == "Add"), None)
 
         if disc and add:
-            if _add_has_installment(add):
-                if _disc_has_installment(disc):
-                    # Both have installments — ChangePlan comparison
-                    changeplan_pairs.append({"disconnect": disc, "add": add})
-                else:
-                    changeplan_pairs.append({"disconnect": disc, "add": add})
-            else:
-                # Add OLI has no installment — store with reason
+            if _disc_has_installment(disc) and not _add_has_installment(add):
                 skipped_records.append(_skipped(add, "Skipped - No Installment on Add OLI"))
+            else:
+                changeplan_pairs.append({"disconnect": disc, "add": add})
         elif add:
             if _add_has_installment(add):
                 single_records.append(add)
