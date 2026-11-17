@@ -47,6 +47,12 @@ def build_b2b_soql(date_from: str, date_to: str, time_from: str = "00:00", time_
     )
 
 
+def _normalise_segment(segment) -> str:
+    """B2BSoho is handled as B2C."""
+    segment = (segment or "").strip()
+    return "B2C" if segment.upper() == "B2BSOHO" else segment
+
+
 def _nested(record: dict, *keys):
     """Safely traverse nested SF response dicts."""
     val = record
@@ -110,7 +116,7 @@ def parse_order_records(raw_records: list) -> tuple:
     orders = defaultdict(list)
     for r in raw_records:
         order_id      = r.get("OrderId") or r.get("Id")
-        segment       = _nested(r, "vlocity_cmt__BillingAccountId__r", "Segment__c") or "B2C"
+        segment       = _normalise_segment(_nested(r, "vlocity_cmt__BillingAccountId__r", "Segment__c")) or "B2C"
         inst_id_field = "PRB2C_Installment_ID__c" if segment == "B2C" else "PRB2B_InstallmentPlanID__c"
         orders[order_id].append({
             "segment":           segment,
@@ -173,10 +179,11 @@ def parse_order_records(raw_records: list) -> tuple:
         add  = next((r for r in recs if r["action"] == "Add"), None)
 
         if disc and add:
-            if _disc_has_installment(disc) and not _add_has_installment(add):
-                skipped_records.append(_skipped(add, "Skipped - No Installment on Add OLI"))
-            else:
+            is_change_plan = disc.get("order_reason") == "Change Plan"
+            if _add_has_installment(add) or (is_change_plan and not _disc_has_installment(disc)):
                 changeplan_pairs.append({"disconnect": disc, "add": add})
+            else:
+                skipped_records.append(_skipped(add, "Skipped - No Installment on Add OLI"))
         elif add:
             if _add_has_installment(add):
                 single_records.append(add)
@@ -194,7 +201,7 @@ def parse_changeplan_records(raw_records: list) -> list:
     orders = defaultdict(list)
     for r in raw_records:
         order_id = r.get("OrderId") or r.get("Id")
-        segment  = _nested(r, "vlocity_cmt__BillingAccountId__r", "Segment__c") or ""
+        segment  = _normalise_segment(_nested(r, "vlocity_cmt__BillingAccountId__r", "Segment__c"))
         inst_field = "PRB2C_Installment_ID__c" if segment == "B2C" else "PRB2B_InstallmentPlanID__c"
         orders[order_id].append({
             "order_id":          order_id,
@@ -288,7 +295,7 @@ def process_changeplan_order(pair: dict):
         "sf_bancan":         sf_bancan,
         "msisdn":            add_rec.get("msisdn"),
         "product_name":      add_rec.get("product_name"),
-        "order_reason":      "Change Plan",
+        "order_reason":      add_rec.get("order_reason") or "Change Plan",
         "contract_term":     add_rec.get("contract_term"),
         "sf_installment_id": add_rec.get("sf_installment_id"),
     }
@@ -303,7 +310,8 @@ def process_changeplan_order(pair: dict):
     else:
         disc_has_inst = bool(disc_contract) and disc_contract != "No Commit Retail Price"
 
-    if not disc_has_inst:
+    is_change_plan = disc_rec.get("order_reason") in (None, "", "Change Plan")
+    if not disc_has_inst and is_change_plan:
         add_aria = check_aria_full(add_oli) if add_oli else {"aria_found": False}
         if add_aria["aria_found"]:
             return {**base,
