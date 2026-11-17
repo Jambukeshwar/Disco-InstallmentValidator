@@ -278,6 +278,30 @@ def check_aria_full(oli_id: str) -> dict:
                 "product_field_value": None, "error": str(exc)}
 
 
+def _validate_add_only(base: dict, add_rec: dict, sf_bancan: str, no_aria: dict) -> dict:
+    add_oli = (add_rec.get("oli_id") or "").strip()
+    if not add_oli:
+        return {**base, **no_aria, "validation": "❌",
+                "match_status": "Add OLI Missing in SF", "error": "No add OLI ID"}
+    add_aria = check_aria_full(add_oli)
+    if not add_aria["aria_found"]:
+        return {**base, **no_aria, "validation": "❌",
+                "match_status": "New Installment Not Found in Aria", "error": add_aria.get("error")}
+    bancan_ok = (add_aria.get("aria_bancan") or "") == sf_bancan
+    inst_ok   = (add_aria.get("aria_installment_id") or "") == (add_rec.get("sf_installment_id") or "")
+    clean     = bancan_ok and inst_ok
+    return {**base,
+            "aria_oli":            add_aria.get("aria_oli"),
+            "aria_bancan":         add_aria.get("aria_bancan"),
+            "aria_installment_id": add_aria.get("aria_installment_id"),
+            "aria_plan_name":      add_aria.get("aria_plan_name"),
+            "device_amount":       add_aria.get("device_amount"),
+            "monthly_amount":      add_aria.get("monthly_amount"),
+            "validation":          "✅" if clean else "⚠️",
+            "match_status":        "Clean" if clean else "Device Exist with wrong Inst ID/BANCAN",
+            "error":               None}
+
+
 def process_changeplan_order(pair: dict):
     """Validate one change plan order pair. Returns None if old device had no installment.
     Output format matches process_single — Add OLI data only, disconnect used internally."""
@@ -337,26 +361,7 @@ def process_changeplan_order(pair: dict):
         if disc_aria.get("aria_api_error"):
             return {**base, **no_aria, "validation": "❌",
                     "match_status": "Aria API Error (Disconnect OLI)", "error": disc_aria.get("error")}
-        if not add_oli:
-            return {**base, **no_aria, "validation": "❌",
-                    "match_status": "Add OLI Missing in SF", "error": "No add OLI ID"}
-        add_aria = check_aria_full(add_oli)
-        if not add_aria["aria_found"]:
-            return {**base, **no_aria, "validation": "❌",
-                    "match_status": "New Installment Not Found in Aria", "error": add_aria.get("error")}
-        bancan_ok = (add_aria.get("aria_bancan") or "") == sf_bancan
-        inst_ok   = (add_aria.get("aria_installment_id") or "") == (add_rec.get("sf_installment_id") or "")
-        clean     = bancan_ok and inst_ok
-        return {**base,
-                "aria_oli":            add_aria.get("aria_oli"),
-                "aria_bancan":         add_aria.get("aria_bancan"),
-                "aria_installment_id": add_aria.get("aria_installment_id"),
-                "aria_plan_name":      add_aria.get("aria_plan_name"),
-                "device_amount":       add_aria.get("device_amount"),
-                "monthly_amount":      add_aria.get("monthly_amount"),
-                "validation":          "✅" if clean else "⚠️",
-                "match_status":        "Clean" if clean else "Device Exist with wrong Inst ID/BANCAN",
-                "error":               None}
+        return _validate_add_only(base, add_rec, sf_bancan, no_aria)
 
     disc_parts = (disc_aria.get("product_field_value") or "").split("|")
 
@@ -366,7 +371,7 @@ def process_changeplan_order(pair: dict):
     except (ValueError, TypeError):
         disc_pos2 = 0
     if disc_pos2 < 1:
-        return None
+        return _validate_add_only(base, add_rec, sf_bancan, no_aria)
 
     # Skip if plan status is not active or change plan (e.g. cancelled, terminated)
     disc_pos9 = disc_parts[9].strip().lower() if len(disc_parts) > 9 else ""
