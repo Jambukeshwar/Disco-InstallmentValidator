@@ -180,8 +180,10 @@ def parse_order_records(raw_records: list) -> tuple:
 
         if disc and add:
             is_change_plan = disc.get("order_reason") == "Change Plan"
-            if _add_has_installment(add) or (is_change_plan and not _disc_has_installment(disc)):
+            if is_change_plan and (_add_has_installment(add) or not _disc_has_installment(disc)):
                 changeplan_pairs.append({"disconnect": disc, "add": add})
+            elif _add_has_installment(add):
+                single_records.append(add)
             else:
                 skipped_records.append(_skipped(add, "Skipped - No Installment on Add OLI"))
         elif add:
@@ -334,8 +336,7 @@ def process_changeplan_order(pair: dict):
     else:
         disc_has_inst = bool(disc_contract) and disc_contract != "No Commit Retail Price"
 
-    is_change_plan = disc_rec.get("order_reason") in (None, "", "Change Plan")
-    if not disc_has_inst and is_change_plan:
+    if not disc_has_inst:
         add_aria = check_aria_full(add_oli) if add_oli else {"aria_found": False}
         if add_aria["aria_found"]:
             return {**base,
@@ -376,7 +377,7 @@ def process_changeplan_order(pair: dict):
     # Skip if plan status is not active or change plan (e.g. cancelled, terminated)
     disc_pos9 = disc_parts[9].strip().lower() if len(disc_parts) > 9 else ""
     if disc_pos9 not in ("active", "change plan"):
-        return None
+        return _validate_add_only(base, add_rec, sf_bancan, no_aria)
 
     if not add_oli:
         return {**base, **no_aria,
