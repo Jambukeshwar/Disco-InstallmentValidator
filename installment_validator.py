@@ -337,7 +337,26 @@ def process_changeplan_order(pair: dict):
         if disc_aria.get("aria_api_error"):
             return {**base, **no_aria, "validation": "❌",
                     "match_status": "Aria API Error (Disconnect OLI)", "error": disc_aria.get("error")}
-        return None  # Genuinely not found — old device had no installment
+        if not add_oli:
+            return {**base, **no_aria, "validation": "❌",
+                    "match_status": "Add OLI Missing in SF", "error": "No add OLI ID"}
+        add_aria = check_aria_full(add_oli)
+        if not add_aria["aria_found"]:
+            return {**base, **no_aria, "validation": "❌",
+                    "match_status": "New Installment Not Found in Aria", "error": add_aria.get("error")}
+        bancan_ok = (add_aria.get("aria_bancan") or "") == sf_bancan
+        inst_ok   = (add_aria.get("aria_installment_id") or "") == (add_rec.get("sf_installment_id") or "")
+        clean     = bancan_ok and inst_ok
+        return {**base,
+                "aria_oli":            add_aria.get("aria_oli"),
+                "aria_bancan":         add_aria.get("aria_bancan"),
+                "aria_installment_id": add_aria.get("aria_installment_id"),
+                "aria_plan_name":      add_aria.get("aria_plan_name"),
+                "device_amount":       add_aria.get("device_amount"),
+                "monthly_amount":      add_aria.get("monthly_amount"),
+                "validation":          "✅" if clean else "⚠️",
+                "match_status":        "Clean" if clean else "Device Exist with wrong Inst ID/BANCAN",
+                "error":               None}
 
     disc_parts = (disc_aria.get("product_field_value") or "").split("|")
 
