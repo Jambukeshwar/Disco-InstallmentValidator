@@ -1513,7 +1513,7 @@
           return `<td style="text-align:center;font-size:16px;color:${col}">${val}</td>`;
         }
         if(c.k==='match_status'){
-          const col=val==='Clean'?'var(--green)':val==='No Device Found in Aria'?'var(--red)':'var(--amber)';
+          const col=(val==='Clean'||String(val).startsWith('Clean -'))?'var(--green)':val==='No Device Found in Aria'?'var(--red)':'var(--amber)';
           return `<td style="color:${col};font-weight:600;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis" title="${val}">${val}</td>`;
         }
         return `<td style="white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${String(val).replace(/"/g,'&quot;')}">${val||'—'}</td>`;
