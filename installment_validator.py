@@ -84,7 +84,7 @@ def build_changeplan_soql(date_from: str, date_to: str, time_from: str = "00:00"
         "vlocity_cmt__Action__c, vlocity_cmt__BillingAccountId__r.Segment__c "
         "FROM orderitem "
         f"WHERE order.ActivatedDate >= {dt_from} AND order.ActivatedDate <= {dt_to} "
-        "AND Product2.vlocity_cmt__ObjectTypeName__c IN ('Mobile Phone','Tablet','Accessory','Smart Watch') "
+        "AND Product2.vlocity_cmt__ObjectTypeName__c IN ('Mobile Phone','Tablet','Accessory','Smart Watch','Smart Device') "
         "AND order.vlocity_cmt__OrderStatus__c = 'Activated' "
         "AND Order.vlocity_cmt__Reason__c IN ('Change Plan') "
         "AND vlocity_cmt__BillingAccountId__r.vlocity_cmt__AccountPaymentType__c = 'Postpaid'"
@@ -103,7 +103,7 @@ def build_order_soql(order_id: str) -> str:
         "vlocity_cmt__BillingAccountId__r.Segment__c "
         "FROM OrderItem "
         "WHERE Product2.vlocity_cmt__ObjectTypeName__c "
-        "IN ('Mobile Phone','Tablet','Accessory','Smart Watch') "
+        "IN ('Mobile Phone','Tablet','Accessory','Smart Watch','Smart Device') "
         f"AND OrderId = '{order_id}'"
     )
 
