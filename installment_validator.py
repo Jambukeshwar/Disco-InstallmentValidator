@@ -86,7 +86,8 @@ def build_changeplan_soql(date_from: str, date_to: str, time_from: str = "00:00"
         f"WHERE order.ActivatedDate >= {dt_from} AND order.ActivatedDate <= {dt_to} "
         "AND Product2.vlocity_cmt__ObjectTypeName__c IN ('Mobile Phone','Tablet','Accessory','Smart Watch') "
         "AND order.vlocity_cmt__OrderStatus__c = 'Activated' "
-        "AND Order.vlocity_cmt__Reason__c IN ('Change Plan')"
+        "AND Order.vlocity_cmt__Reason__c IN ('Change Plan') "
+        "AND vlocity_cmt__BillingAccountId__r.vlocity_cmt__AccountPaymentType__c = 'Postpaid'"
     )
 
 
